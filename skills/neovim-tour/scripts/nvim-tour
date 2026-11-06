@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Control the parent Neovim through its existing command-line RPC client."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+
+def positive(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def arguments():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--server", default=os.environ.get("NEOVIM_TOUR_SOCKET") or os.environ.get("NVIM"),
+                        help="Neovim socket (default: NEOVIM_TOUR_SOCKET or NVIM)")
+    parser.add_argument("--window", type=positive, default=os.environ.get("NEOVIM_TOUR_WINDOW"),
+                        help="code window ID (default: NEOVIM_TOUR_WINDOW)")
+    commands = parser.add_subparsers(dest="action", required=True)
+    commands.add_parser("state", help="inspect windows, buffers, and code around the target cursor")
+    read = commands.add_parser("read", help="read the target buffer, including unsaved changes")
+    read.add_argument("--start", type=positive, default=1)
+    read.add_argument("--end", type=positive, help="last line, inclusive (default: start + 79)")
+    show = commands.add_parser("show", help="open a file and highlight a range without taking focus")
+    show.add_argument("file")
+    show.add_argument("--line", type=positive, default=1)
+    show.add_argument("--end", type=positive)
+    show.add_argument("--note", default="")
+    highlight = commands.add_parser("highlight", help="highlight lines in the target buffer")
+    highlight.add_argument("start", type=positive)
+    highlight.add_argument("--end", type=positive)
+    highlight.add_argument("--note", default="")
+    diff = commands.add_parser("diff", help="compare the current file or FILE with a Git revision")
+    diff.add_argument("file", nargs="?")
+    diff.add_argument("--base", default="HEAD", help="Git revision (default: HEAD)")
+    commands.add_parser("clear", help="remove this target's tour annotations and diff pane")
+    args = vars(parser.parse_args())
+    # Resolve paths in the caller's working directory, not Neovim's potentially different cwd.
+    if args.get("file"):
+        args["file"] = str(Path(args["file"]).expanduser().resolve())
+    return args
+
+
+def main():
+    args = arguments()
+    server = args.pop("server")
+    if not server:
+        raise ValueError("No Neovim socket. Start with :Codex, or supply --server.")
+    if not args["window"]:
+        raise ValueError("No code window. Start with :Codex, or supply --window (see :echo win_getid()).")
+    payload = json.dumps(args, ensure_ascii=False).replace("'", "''")
+    expression = "json_encode(luaeval('require(\"neovim_tour\").request(_A)',json_decode('%s')))" % payload
+    result = subprocess.run(
+        [os.environ.get("NEOVIM_TOUR_NVIM", "nvim"), "--server", server, "--remote-expr", expression],
+        capture_output=True, text=True, timeout=10, check=False)
+    if result.returncode:
+        raise ValueError("Neovim RPC failed. Check the socket and plugin installation. " + result.stderr.strip())
+    response = json.loads(result.stdout)
+    print(json.dumps(response, ensure_ascii=False))
+    return 0 if response.get("ok") else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+        print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False))
+        sys.exit(1)
