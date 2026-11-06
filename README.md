@@ -86,7 +86,8 @@ All commands return JSON and use a nonzero exit status for errors. Paths are
 resolved in the caller's working directory. Line numbers are one-based and
 inclusive. `read` includes unsaved changes; it defaults to 80 lines. `diff` omits
 the file argument to use the current code buffer, and defaults to `HEAD`. An
-added file has an empty baseline. The baseline buffer is temporary and read-only.
+added file has an empty baseline. Deleted files can be compared even when their
+parent directory is gone. The baseline buffer is temporary and read-only.
 
 For a branch comparison, use its merge-base with the intended base branch:
 
@@ -133,8 +134,9 @@ the `NeovimTourRange` and `NeovimTourNote` highlight groups in your colorscheme.
 - **Socket access fails:** the Codex shell must be allowed to reach the local
   Unix socket. Use the normal approval flow if your sandbox restricts it; the
   plugin does not weaken your sandbox or approval settings.
-- **Code pane is already in diff mode:** finish that diff first. The helper
-  refuses to replace an unrelated comparison.
+- **Tab already contains a diff:** finish that comparison first or use another
+  tab. Neovim shares one diff group per tab, so the helper refuses to join an
+  unrelated comparison.
 
 ## Uninstall
 

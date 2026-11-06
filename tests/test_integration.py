@@ -106,6 +106,11 @@ class EditorTest(unittest.TestCase):
         self.call("show", str(self.file), "--line", "10", "--end", "15", "--note", "Tour note")
         self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), self.terminal)
         self.assertFalse(self.lua("return vim.bo[%d].modified" % self.buffer))
+        marks = self.lua("return vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})" % self.buffer)
+        annotation = next(mark for mark in marks if "virt_lines" in mark[3])
+        self.assertEqual(annotation[1], 9)
+        self.assertEqual(annotation[3]["end_row"], 15)
+        self.assertEqual(annotation[3]["virt_lines"][0][0][0], "  Tour note")
         self.call("clear")
         marks = self.lua("return vim.api.nvim_buf_get_extmarks(%d,%d,0,-1,{})" % (self.buffer, other_ns))
         self.assertEqual(len(marks), 1)
@@ -114,6 +119,11 @@ class EditorTest(unittest.TestCase):
         self.lua("vim.api.nvim_buf_set_lines(%d,0,1,false,{'unsaved change'}); return true" % self.buffer)
         data = self.call("diff", str(self.file), "--base", "HEAD")
         self.assertTrue(data["ok"])
+        baseline = self.lua("return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(%d),0,-1,false)"
+                            % data["result"]["baseline_window"])
+        self.assertEqual(baseline, ["line %d" % i for i in range(1, 61)])
+        self.assertEqual(self.call("read", "--start", "1", "--end", "1")["result"]["lines"],
+                         ["unsaved change"])
         self.assertEqual(self.lua("return #vim.api.nvim_list_wins()"), 3)
         self.assertTrue(self.lua("return vim.wo[%d].diff" % self.source))
         self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), self.terminal)
@@ -141,10 +151,120 @@ class EditorTest(unittest.TestCase):
     def test_diff_for_a_new_file_uses_an_empty_baseline(self):
         added = self.directory / "added.py"
         added.write_text("new file\n")
-        self.call("diff", str(added))
+        data = self.call("diff", str(added))["result"]
+        self.assertEqual(self.lua("return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(%d),0,-1,false)"
+                                  % data["baseline_window"]), [""])
         self.assertEqual(self.lua("return #vim.api.nvim_list_wins()"), 3)
         self.call("clear")
         self.assertEqual(added.read_text(), "new file\n")
+
+    def commit(self, message):
+        subprocess.run(["git", "-c", "core.autocrlf=false", "add", "."], cwd=self.directory, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                        "commit", "-qm", message], cwd=self.directory, check=True)
+
+    def test_diff_uses_the_requested_earlier_revision(self):
+        self.file.write_text("new HEAD version\n")
+        self.commit("change saved version")
+        self.lua("vim.api.nvim_buf_set_lines(%d,0,-1,false,{'live unsaved version'}); return true" % self.buffer)
+        result = self.call("diff", str(self.file), "--base", "HEAD^")["result"]
+        baseline = self.lua("return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(%d),0,1,false)"
+                            % result["baseline_window"])
+        self.assertEqual(baseline, ["line 1"])
+        self.assertEqual(self.call("read", "--end", "1")["result"]["lines"], ["live unsaved version"])
+
+    def test_crlf_baseline_matches_neovims_live_buffer_representation(self):
+        self.file.write_bytes(b"first\r\nsecond\r\n")
+        self.commit("CRLF source")
+        self.lua("vim.api.nvim_win_call(%d,function() vim.cmd('edit!') end); return true" % self.source)
+        result = self.call("diff", str(self.file))["result"]
+        baseline = self.lua("return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(%d),0,-1,false)"
+                            % result["baseline_window"])
+        self.assertEqual(baseline, ["first", "second"])
+        self.assertEqual(self.call("read")["result"]["lines"], ["first", "second"])
+
+    def test_diff_does_not_join_an_unrelated_comparison_in_the_same_tab(self):
+        other = self.lua("""
+            local win=vim.api.nvim_open_win(%d,false,{split='left',win=%d})
+            vim.api.nvim_win_call(win,function() vim.cmd('diffthis') end)
+            return win
+        """ % (self.buffer, self.source))
+        result = self.call("diff", str(self.file), success=False)
+        self.assertIn("diff", result["error"])
+        self.assertEqual(self.lua("return #vim.api.nvim_list_wins()"), 3)
+        self.assertTrue(self.lua("return vim.wo[%d].diff" % other))
+        self.assertFalse(self.lua("return vim.wo[%d].diff" % self.source))
+
+    def test_diff_handles_a_deleted_file_with_a_deleted_parent_directory(self):
+        folder = self.directory / "removed_folder"
+        folder.mkdir()
+        file = folder / "removed.py"
+        file.write_text("removed code\n")
+        self.commit("add removed file")
+        file.unlink()
+        folder.rmdir()
+        result = self.call("diff", str(file))["result"]
+        baseline = self.lua("return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(%d),0,-1,false)"
+                            % result["baseline_window"])
+        self.assertEqual(baseline, ["removed code"])
+        self.assertEqual(self.call("read")["result"]["lines"], [""])
+        self.call("clear")
+        self.assertFalse(file.exists())
+
+    def test_navigation_restores_existing_eventignore_even_after_errors(self):
+        for original in ("TextChanged,InsertLeave", "all"):
+            with self.subTest(eventignore=original):
+                self.lua("vim.o.eventignore=%s; return true" % json.dumps(original))
+                self.call("show", str(self.file), "--line", "1")
+                self.assertEqual(self.lua("return vim.o.eventignore"), original)
+                self.call("show", str(self.file), "--line", "999", success=False)
+                self.assertEqual(self.lua("return vim.o.eventignore"), original)
+                self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), self.terminal)
+
+    def test_show_does_not_autowrite_when_hidden_buffers_are_disabled(self):
+        self.lua("""
+            vim.o.hidden=false
+            vim.o.autowrite=true
+            vim.o.autowriteall=true
+            vim.api.nvim_buf_set_lines(%d,0,1,false,{'do not save me'})
+            return true
+        """ % self.buffer)
+        self.call("show", str(self.other))
+        self.assertTrue(self.file.read_text().startswith("line 1\n"))
+        self.assertTrue(self.lua("return vim.bo[%d].modified" % self.buffer))
+        self.assertEqual(self.lua("return {vim.o.hidden,vim.o.autowrite,vim.o.autowriteall}"),
+                         [False, True, True])
+
+    def test_show_preserves_buffers_with_destructive_bufhidden_settings(self):
+        for setting in ("unload", "delete", "wipe"):
+            with self.subTest(bufhidden=setting):
+                file = self.directory / (setting + ".py")
+                file.write_text("saved\n")
+                self.call("show", str(file))
+                buffer = self.lua("return vim.api.nvim_win_get_buf(%d)" % self.source)
+                self.lua("vim.bo[%d].bufhidden=%s; vim.api.nvim_buf_set_lines(%d,0,-1,false,{'unsaved'}); return true"
+                         % (buffer, json.dumps(setting), buffer))
+                self.call("show", str(self.other))
+                self.assertTrue(self.lua("return vim.api.nvim_buf_is_loaded(%d)" % buffer))
+                self.assertEqual(self.lua("return vim.api.nvim_buf_get_lines(%d,0,-1,false)" % buffer), ["unsaved"])
+                self.assertEqual(self.lua("return vim.bo[%d].bufhidden" % buffer), setting)
+                self.assertEqual(file.read_text(), "saved\n")
+
+    def test_invalid_show_preserves_the_current_file_and_annotations(self):
+        self.call("show", str(self.file), "--line", "3", "--note", "keep this stop")
+        before = self.lua("return vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})" % self.buffer)
+        self.call("show", str(self.directory / "missing.py"), success=False)
+        self.call("show", str(self.other), "--line", "999", success=False)
+        self.assertEqual(self.lua("return vim.api.nvim_win_get_buf(%d)" % self.source), self.buffer)
+        self.assertEqual(self.lua("return vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})" % self.buffer), before)
+        self.assertEqual(self.lua("return vim.api.nvim_win_get_cursor(%d)" % self.source), [3, 0])
+
+    def test_invalid_show_preserves_the_current_comparison(self):
+        result = self.call("diff", str(self.file))["result"]
+        self.call("show", str(self.other), "--line", "999", success=False)
+        self.assertTrue(self.lua("return vim.api.nvim_win_is_valid(%d)" % result["baseline_window"]))
+        self.assertTrue(self.lua("return vim.wo[%d].diff" % self.source))
+        self.assertEqual(self.lua("return #vim.api.nvim_list_wins()"), 3)
 
     def test_targets_have_independent_annotations(self):
         self.call("highlight", "3", "--note", "first tour")

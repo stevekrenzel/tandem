@@ -121,11 +121,16 @@ local function inspect(window)
     cursor = cursor, context = read(window, math.max(1, cursor[1] - 8), cursor[1] + 12) }
 end
 
-local function annotate(window, first, last, note)
-  local buffer = api.nvim_win_get_buf(window)
+local function validate_range(buffer, first, last)
   local count = api.nvim_buf_line_count(buffer)
   last = last or first
   assert(first >= 1 and last >= first and last <= count, "Line range is outside the buffer.")
+  return last
+end
+
+local function annotate(window, first, last, note)
+  local buffer = api.nvim_win_get_buf(window)
+  last = validate_range(buffer, first, last)
   local state = session(window)
   clear_marks(state)
   local mark = { end_row = last, end_col = 0, hl_group = "NeovimTourRange", hl_eol = true, priority = 150 }
@@ -145,13 +150,26 @@ local function annotate(window, first, last, note)
   return { file = api.nvim_buf_get_name(buffer), start = first, finish = last }
 end
 
-local function open_file(window, file)
+local function load_file(file, allow_missing)
   assert(type(file) == "string" and file ~= "", "A file path is required.")
   local stat = vim.uv.fs_stat(file)
   assert(not stat or stat.type == "file", "Path is not a regular file.")
   local buffer = vim.fn.bufadd(file)
+  assert(stat or allow_missing or api.nvim_buf_is_loaded(buffer), "File does not exist: " .. file)
   vim.fn.bufload(buffer)
-  api.nvim_win_set_buf(window, buffer)
+  return buffer
+end
+
+local function switch_buffer(window, buffer)
+  local previous_buffer = api.nvim_win_get_buf(window)
+  local previous_bufhidden = vim.bo[previous_buffer].bufhidden
+  -- Neovim can autowrite or unload a buffer independently of navigation events.
+  vim.bo[previous_buffer].bufhidden = "hide"
+  local ok, err = pcall(api.nvim_win_set_buf, window, buffer)
+  if api.nvim_buf_is_valid(previous_buffer) then
+    vim.bo[previous_buffer].bufhidden = previous_bufhidden
+  end
+  if not ok then error(err, 0) end
   return buffer
 end
 
@@ -167,6 +185,11 @@ local function show_diff(window, file, base)
   file = file or api.nvim_buf_get_name(current)
   assert(file ~= "", "The code buffer has no file name.")
   local directory = vim.fn.fnamemodify(file, ":h")
+  while vim.fn.isdirectory(directory) == 0 do
+    local parent = vim.fn.fnamemodify(directory, ":h")
+    assert(parent ~= directory, "File has no existing parent directory.")
+    directory = parent
+  end
   local ok, repository = git(directory, { "rev-parse", "--show-toplevel" })
   assert(ok, "File is not in a Git repository.")
   repository = vim.trim(repository)
@@ -184,11 +207,18 @@ local function show_diff(window, file, base)
     content = ""
   end
   local state = session(window)
-  assert(state.diff or not vim.wo[window].diff, "The code pane is already in a diff. Close that diff before starting a tour diff.")
+  for _, win in ipairs(api.nvim_tabpage_list_wins(api.nvim_win_get_tabpage(window))) do
+    local own_diff = state.diff
+    local is_tour_window = own_diff and (win == own_diff.source
+      or (win == own_diff.window and api.nvim_win_get_buf(win) == own_diff.buffer))
+    assert(not vim.wo[win].diff or is_tour_window,
+      "This tab already contains an unrelated diff. Close that comparison before starting a tour diff.")
+  end
+  local buffer = load_file(file, exists)
   clear(window)
-  local buffer = open_file(window, file)
+  switch_buffer(window, buffer)
   local baseline = api.nvim_create_buf(false, true)
-  local lines = vim.split(content, "\n", { plain = true })
+  local lines = vim.split(content:gsub("\r\n", "\n"), "\n", { plain = true })
   if lines[#lines] == "" and #lines > 1 then table.remove(lines) end
   api.nvim_buf_set_lines(baseline, 0, -1, false, lines)
   vim.bo[baseline].filetype = vim.bo[buffer].filetype
@@ -216,8 +246,10 @@ function M.request(args)
       elseif args.action == "read" then
         return read(window, args.start, args["end"])
       elseif args.action == "show" then
+        local buffer = load_file(args.file, false)
+        validate_range(buffer, args.line, args["end"])
         clear(window)
-        open_file(window, args.file)
+        switch_buffer(window, buffer)
         return annotate(window, args.line, args["end"], args.note)
       elseif args.action == "highlight" then
         return annotate(window, args.start, args["end"], args.note)
