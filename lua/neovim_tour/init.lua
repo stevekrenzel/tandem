@@ -282,7 +282,8 @@ function M.launch(prompt)
     api.nvim_win_set_width(0, math.max(20, math.floor(available * options.width)))
     local job = vim.fn.jobstart(command, {
       term = true, cwd = cwd,
-      env = { NEOVIM_TOUR_SOCKET = vim.v.servername, NEOVIM_TOUR_WINDOW = tostring(window),
+      env = { NEOVIM_TOUR_EDITOR = "neovim", NEOVIM_TOUR_SERVER = vim.v.servername,
+        NEOVIM_TOUR_SOCKET = vim.v.servername, NEOVIM_TOUR_WINDOW = tostring(window),
         NEOVIM_TOUR_CLI = helper, NEOVIM_TOUR_NVIM = vim.v.progpath },
     })
     assert(job > 0, "Could not start Codex. Check the configured codex_cmd.")

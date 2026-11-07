@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control the parent Neovim through its existing command-line RPC client."""
+"""Control the parent Neovim or MacVim through its built-in remote client."""
 
 import argparse
 import json
@@ -18,8 +18,11 @@ def positive(value):
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", default=os.environ.get("NEOVIM_TOUR_SOCKET") or os.environ.get("NVIM"),
-                        help="Neovim socket (default: NEOVIM_TOUR_SOCKET or NVIM)")
+    editor = os.environ.get("NEOVIM_TOUR_EDITOR") or (
+        "macvim" if os.environ.get("VIM_SERVERNAME") and not os.environ.get("NVIM") else "neovim")
+    parser.add_argument("--editor", choices=("neovim", "macvim"), default=editor,
+                        help="editor backend (default: launcher environment)")
+    parser.add_argument("--server", help="Neovim socket or MacVim server name (default: launcher environment)")
     parser.add_argument("--window", type=positive, default=os.environ.get("NEOVIM_TOUR_WINDOW"),
                         help="code window ID (default: NEOVIM_TOUR_WINDOW)")
     commands = parser.add_subparsers(dest="action", required=True)
@@ -49,18 +52,25 @@ def arguments():
 
 def main():
     args = arguments()
-    server = args.pop("server")
+    editor = args.pop("editor")
+    legacy_server = (os.environ.get("NEOVIM_TOUR_SOCKET") or os.environ.get("NVIM")) if editor == "neovim" else os.environ.get("VIM_SERVERNAME")
+    server = args.pop("server") or os.environ.get("NEOVIM_TOUR_SERVER") or legacy_server
     if not server:
-        raise ValueError("No Neovim socket. Start with :Codex, or supply --server.")
+        raise ValueError("No editor connection. Start with :Codex, or supply --editor and --server.")
     if not args["window"]:
         raise ValueError("No code window. Start with :Codex, or supply --window (see :echo win_getid()).")
     payload = json.dumps(args, ensure_ascii=False).replace("'", "''")
-    expression = "json_encode(luaeval('require(\"neovim_tour\").request(_A)',json_decode('%s')))" % payload
+    if editor == "neovim":
+        expression = "json_encode(luaeval('require(\"neovim_tour\").request(_A)',json_decode('%s')))" % payload
+        command = [os.environ.get("NEOVIM_TOUR_NVIM", "nvim"), "--server", server]
+    else:
+        expression = "json_encode(neovim_tour#Request(json_decode('%s')))" % payload
+        command = [os.environ.get("NEOVIM_TOUR_VIM", "mvim"), "--servername", server]
     result = subprocess.run(
-        [os.environ.get("NEOVIM_TOUR_NVIM", "nvim"), "--server", server, "--remote-expr", expression],
+        [*command, "--remote-expr", expression],
         capture_output=True, text=True, timeout=10, check=False)
     if result.returncode:
-        raise ValueError("Neovim RPC failed. Check the socket and plugin installation. " + result.stderr.strip())
+        raise ValueError("Editor RPC failed. Check the connection and plugin installation. " + result.stderr.strip())
     response = json.loads(result.stdout)
     print(json.dumps(response, ensure_ascii=False))
     return 0 if response.get("ok") else 1

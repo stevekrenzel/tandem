@@ -32,7 +32,9 @@ class EditorTest(unittest.TestCase):
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self.socket = str(self.directory / "n.sock")
         self.env = dict(os.environ, NVIM_LOG_FILE="/dev/null")
-        self.env.pop("NVIM", None)
+        for key in list(self.env):
+            if key.startswith("NEOVIM_TOUR_") or key in ("NVIM", "VIM_SERVERNAME"):
+                self.env.pop(key)
         startup = "vim.opt.runtimepath:prepend(%s); vim.o.loadplugins=true" % json.dumps(str(ROOT), ensure_ascii=False)
         self.proc = subprocess.Popen(
             ["nvim", "--headless", "-u", "NONE", "-i", "NONE", "-n",
@@ -315,11 +317,12 @@ class InstallerTest(unittest.TestCase):
         self.data = self.directory / "data"
         self.skills = self.directory / "skills"
         self.bin = self.directory / "bin"
+        self.vim = self.directory / "vim"
 
     def install(self, *args):
         return subprocess.run([sys.executable, str(ROOT / "install.py"),
                                "--nvim-data-dir", str(self.data), "--skill-dir", str(self.skills),
-                               "--bin-dir", str(self.bin), *args], text=True, capture_output=True)
+                               "--bin-dir", str(self.bin), "--vim-dir", str(self.vim), *args], text=True, capture_output=True)
 
     def test_install_is_idempotent_and_uninstall_only_removes_our_links(self):
         for _ in range(2):
@@ -342,6 +345,25 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("already exists", result.stderr)
         self.assertFalse(self.data.exists())
         self.assertFalse(self.bin.exists())
+
+    def test_macvim_only_and_both_use_the_expected_package_directories(self):
+        result = self.install("--editor", "macvim")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.vim / "pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
+        self.assertFalse(self.data.exists())
+        self.assertEqual(self.install("--editor", "both").returncode, 0)
+        self.assertEqual((self.data / "site/pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
+        self.assertEqual(self.install("--editor", "both", "--uninstall").returncode, 0)
+        self.assertFalse((self.vim / "pack/neovim-tour/start/neovim-tour").is_symlink())
+        self.assertFalse((self.bin / "nvim-tour").is_symlink())
+
+    def test_uninstalling_one_editor_keeps_the_other_editor_and_shared_skill(self):
+        self.assertEqual(self.install("--editor", "both").returncode, 0)
+        self.assertEqual(self.install("--editor", "macvim", "--uninstall").returncode, 0)
+        self.assertFalse((self.vim / "pack/neovim-tour/start/neovim-tour").is_symlink())
+        self.assertEqual((self.data / "site/pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
+        self.assertTrue((self.skills / "neovim-tour").is_symlink())
+        self.assertTrue((self.bin / "nvim-tour").is_symlink())
 
 
 if __name__ == "__main__":

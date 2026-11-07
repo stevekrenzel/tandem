@@ -1,14 +1,14 @@
 ---
 name: neovim-tour
-description: Guide a code tour or pull request walkthrough in a live Neovim session, opening files, highlighting code, and showing Git diffs while chatting in its Codex terminal. Use when launched with :Codex or asked to walk through code in Neovim.
+description: Guide a code tour or pull request walkthrough in a live Neovim or MacVim session, opening files, highlighting code, and showing Git diffs while chatting in its Codex terminal. Use when launched with :Codex or asked to walk through code in either editor.
 ---
 
 Use the bundled helper to control the connected editor. The launcher supplies the
-socket, code window, and helper path; do not build another server or RPC client.
+editor connection, code window, and helper path; do not build another server or RPC client.
 
 Run the helper as `"$NEOVIM_TOUR_CLI"` when that variable is available. Otherwise
 use the absolute path to `scripts/nvim-tour` beside this skill. It requires Python
-3.9+ and Neovim 0.11+. Every response is JSON: `{ "ok": true, "result": ... }` or
+3.9+ and Neovim 0.11+ or MacVim with Vim 9.1+. Every response is JSON: `{ "ok": true, "result": ... }` or
 `{ "ok": false, "error": ... }` with a nonzero exit code.
 
 ## Connect and orient
@@ -26,10 +26,13 @@ changes, and other windows. Read the live buffer when its contents matter:
 "$NEOVIM_TOUR_CLI" read --start 1 --end 100
 ```
 
-If the socket or window is missing, explain that the user should launch `:Codex`
+If the connection or window is missing, explain that the user should launch `:Codex`
 from the code window. A closed target is an error, not permission to guess another
 editor. An explicitly selected connection can use global flags before the command:
-`nvim-tour --server /path/to/socket --window 1000 state`.
+`nvim-tour --server /path/to/socket --window 1000 state` for Neovim, or
+`nvim-tour --editor macvim --server VIM --window 1000 state` for MacVim. The
+launcher selects the backend and exact editor executable automatically. MacVim
+uses its GUI's native server; don't start a second editor to find a connection.
 
 ## Give the walkthrough
 
@@ -43,7 +46,7 @@ line references. Keep the Codex terminal focused; the helper does this for you.
 ```
 
 Paths resolve from the shell's working directory. Line numbers are one-based and
-inclusive. Annotations use extmarks and virtual lines: they are not source edits.
+inclusive. Both backends use editor-native highlighting and virtual notes, not source edits.
 Keep notes short; put the explanation in chat.
 
 By default, show one coherent stop, explain it, and wait for the user's next step
