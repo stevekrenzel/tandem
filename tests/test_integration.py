@@ -4,8 +4,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -71,10 +71,63 @@ class EditorTest(unittest.TestCase):
         return json.loads(result.stdout)
 
     def call(self, *args, success=True):
-        result = subprocess.run([sys.executable, str(CLI), *args], env=self.env,
+        result = subprocess.run([str(CLI), *args], env=self.env,
                                 cwd=self.directory, text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode == 0, success, result.stderr or result.stdout)
         return json.loads(result.stdout)
+
+    def test_helper_needs_no_python_and_preserves_quoted_multiline_arguments(self):
+        tools = self.directory / "tools"
+        tools.mkdir()
+        (tools / "nvim").symlink_to(shutil.which("nvim"))
+        self.env["PATH"] = str(tools)
+        self.lua("vim.cmd('cd /tmp'); return true")
+        note = "O'Brien\n\tü \\ $HOME `touch sentinel` $(touch sentinel) ');throw 'injected"
+        self.call("show", self.file.name, "--line", "2", "--note", note)
+        marks = self.lua("return vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})" % self.buffer)
+        annotation = next(mark for mark in marks if "virt_lines" in mark[3])
+        self.assertEqual([line[0][0] for line in annotation[3]["virt_lines"]],
+                         ["  " + line for line in note.split("\n")])
+        self.assertFalse((self.directory / "sentinel").exists())
+
+    def test_unresponsive_editor_times_out_and_can_resume(self):
+        self.proc.send_signal(signal.SIGSTOP)
+        started = time.monotonic()
+        try:
+            result = subprocess.run([str(CLI), "state"], env=self.env, cwd=self.directory,
+                                    text=True, capture_output=True, timeout=12)
+        finally:
+            self.proc.send_signal(signal.SIGCONT)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timed out", result.stderr)
+        self.assertLess(time.monotonic() - started, 12)
+        self.assertTrue(self.call("state")["ok"])
+
+    def test_git_comparison_does_not_use_the_configured_shell(self):
+        self.lua("vim.o.shell='/usr/bin/false'; return true")
+        result = self.call("diff")
+        self.assertTrue(result["ok"])
+
+    def test_special_files_are_rejected_before_loading(self):
+        pipe = self.directory / "pipe"
+        os.mkfifo(pipe)
+        result = self.call("show", str(pipe), success=False)
+        self.assertIn("regular file", result["error"])
+        self.assertEqual(self.lua("return vim.api.nvim_win_get_buf(%d)" % self.source), self.buffer)
+
+    def test_malformed_commands_preserve_existing_comparison_and_annotations(self):
+        self.call("diff")
+        self.call("highlight", "2", "--note", "keep this stop")
+        before = self.lua("return {wins=vim.api.nvim_list_wins(), marks=vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})}" % self.buffer)
+        commands = [("unknown",), ("state", "--line", "1"), ("read", "--end"),
+                    ("read", "--start", "abc"), ("show", str(self.other), "--line", "0"),
+                    ("highlight",), ("diff", str(self.file), str(self.other)), ("clear", "extra")]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIn("error", self.call(*command, success=False))
+                after = self.lua("return {wins=vim.api.nvim_list_wins(), marks=vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})}" % self.buffer)
+                self.assertEqual(after, before)
+                self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), self.terminal)
 
     def test_show_preserves_focus_unsaved_buffers_and_autosave_hooks(self):
         self.lua("""
@@ -306,64 +359,60 @@ class EditorTest(unittest.TestCase):
         self.assertEqual(launched["env"]["NEOVIM_TOUR_SOCKET"], self.socket)
         self.assertEqual(launched["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
         self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_CLI"]), CLI)
-        self.assertEqual(launched["argv"], ["--no-daemon", "Use $neovim-tour. Explain the 'quoted' function; don't execute shell commands"])
+        self.assertEqual(launched["argv"], ["--no-daemon", "Read and follow %s. Explain the 'quoted' function; don't execute shell commands" % (ROOT / "skills/neovim-tour/SKILL.md")])
 
 
 class InstallerTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(prefix="tour install ")
         self.addCleanup(self.tmp.cleanup)
         self.directory = Path(self.tmp.name)
         self.data = self.directory / "data"
-        self.skills = self.directory / "skills"
-        self.bin = self.directory / "bin"
         self.vim = self.directory / "vim"
+        self.nvim_package = self.data / "site/pack/neovim-tour/start/neovim-tour"
+        self.vim_package = self.vim / "pack/neovim-tour/start/neovim-tour"
 
     def install(self, *args):
-        return subprocess.run([sys.executable, str(ROOT / "install.py"),
-                               "--nvim-data-dir", str(self.data), "--skill-dir", str(self.skills),
-                               "--bin-dir", str(self.bin), "--vim-dir", str(self.vim), *args], text=True, capture_output=True)
+        return subprocess.run([str(ROOT / "install.sh"), "--nvim-data-dir", str(self.data),
+                               "--vim-dir", str(self.vim), *args], text=True, capture_output=True)
 
     def test_install_is_idempotent_and_uninstall_only_removes_our_links(self):
         for _ in range(2):
             result = self.install()
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.skills / "neovim-tour").resolve(), ROOT / "skills/neovim-tour")
-        self.assertEqual((self.data / "site/pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
-        self.assertEqual((self.bin / "nvim-tour").resolve(), CLI)
-        (self.bin / "unrelated").write_text("keep")
+        self.assertEqual(self.nvim_package.resolve(), ROOT)
+        unrelated = self.nvim_package.parent / "unrelated"
+        unrelated.write_text("keep")
         self.assertEqual(self.install("--uninstall").returncode, 0)
-        self.assertEqual((self.bin / "unrelated").read_text(), "keep")
-        self.assertFalse((self.skills / "neovim-tour").exists())
+        self.assertEqual(unrelated.read_text(), "keep")
+        self.assertFalse(self.nvim_package.exists())
         self.assertTrue(ROOT.exists())
 
     def test_conflicts_are_reported_before_installing_anything(self):
-        self.skills.mkdir()
-        (self.skills / "neovim-tour").mkdir()
-        result = self.install()
+        self.vim_package.mkdir(parents=True)
+        result = self.install("--editor", "both")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("already exists", result.stderr)
         self.assertFalse(self.data.exists())
-        self.assertFalse(self.bin.exists())
+        self.assertNotEqual(self.install("--editor", "both", "--uninstall").returncode, 0)
+        self.assertTrue(self.vim_package.is_dir())
 
-    def test_macvim_only_and_both_use_the_expected_package_directories(self):
-        result = self.install("--editor", "macvim")
+    def test_vim_only_and_both_use_the_expected_package_directories(self):
+        result = self.install("--editor", "vim")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.vim / "pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
+        self.assertEqual(self.vim_package.resolve(), ROOT)
         self.assertFalse(self.data.exists())
         self.assertEqual(self.install("--editor", "both").returncode, 0)
-        self.assertEqual((self.data / "site/pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
+        self.assertEqual(self.nvim_package.resolve(), ROOT)
         self.assertEqual(self.install("--editor", "both", "--uninstall").returncode, 0)
-        self.assertFalse((self.vim / "pack/neovim-tour/start/neovim-tour").is_symlink())
-        self.assertFalse((self.bin / "nvim-tour").is_symlink())
+        self.assertFalse(self.vim_package.is_symlink())
+        self.assertFalse(self.nvim_package.is_symlink())
 
-    def test_uninstalling_one_editor_keeps_the_other_editor_and_shared_skill(self):
+    def test_uninstalling_one_editor_keeps_the_other_editor(self):
         self.assertEqual(self.install("--editor", "both").returncode, 0)
         self.assertEqual(self.install("--editor", "macvim", "--uninstall").returncode, 0)
-        self.assertFalse((self.vim / "pack/neovim-tour/start/neovim-tour").is_symlink())
-        self.assertEqual((self.data / "site/pack/neovim-tour/start/neovim-tour").resolve(), ROOT)
-        self.assertTrue((self.skills / "neovim-tour").is_symlink())
-        self.assertTrue((self.bin / "nvim-tour").is_symlink())
+        self.assertFalse(self.vim_package.is_symlink())
+        self.assertEqual(self.nvim_package.resolve(), ROOT)
 
 
 if __name__ == "__main__":

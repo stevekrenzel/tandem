@@ -38,21 +38,30 @@ endfunction
 function! s:Session(window) abort
   let key = string(a:window)
   if !has_key(s:sessions, key)
-    let state = {'range_type': 'NeovimTourRange_' . key, 'note_type': 'NeovimTourNote_' . key}
-    call prop_type_add(state.range_type, {'highlight': 'NeovimTourRange', 'priority': 150, 'combine': 1})
-    call prop_type_add(state.note_type, {'highlight': 'NeovimTourNote', 'priority': 150})
+    if has('nvim')
+      let state = {'namespace': nvim_create_namespace('neovim-tour:' . key)}
+    else
+      let state = {'range_type': 'NeovimTourRange_' . key, 'note_type': 'NeovimTourNote_' . key}
+      call prop_type_add(state.range_type, {'highlight': 'NeovimTourRange', 'priority': 150, 'combine': 1})
+      call prop_type_add(state.note_type, {'highlight': 'NeovimTourNote', 'priority': 150})
+    endif
     let s:sessions[key] = state
   endif
   return s:sessions[key]
 endfunction
 
 function! s:ClearMarks(state) abort
-  if has_key(a:state, 'marked_buffer')
-    if bufloaded(a:state.marked_buffer)
+  if !has_key(a:state, 'marked_buffer')
+    return
+  endif
+  if bufloaded(a:state.marked_buffer)
+    if has('nvim')
+      call nvim_buf_clear_namespace(a:state.marked_buffer, a:state.namespace, 0, -1)
+    else
       call prop_remove({'types': [a:state.range_type, a:state.note_type], 'bufnr': a:state.marked_buffer, 'all': 1})
     endif
-    unlet a:state.marked_buffer
   endif
+  unlet a:state.marked_buffer
 endfunction
 
 function! s:Clear(window) abort
@@ -125,13 +134,22 @@ function! s:Annotate(window, first, last, note) abort
   let last = s:ValidateRange(buffer, a:first, a:last)
   let state = s:Session(a:window)
   call s:ClearMarks(state)
-  call prop_add(a:first, 1, {'type': state.range_type, 'bufnr': buffer, 'end_lnum': last,
-        \ 'end_col': strlen(getbufline(buffer, last)[0]) + 1})
-  for line in reverse(split(a:note, "\n", 1))
-    if line !=# ''
-      call prop_add(a:first, 0, {'type': state.note_type, 'bufnr': buffer, 'text': '  ' . line, 'text_align': 'above'})
+  if has('nvim')
+    let mark = {'end_row': last, 'end_col': 0, 'hl_group': 'NeovimTourRange', 'hl_eol': v:true, 'priority': 150}
+    if a:note !=# ''
+      let mark.virt_lines = map(split(a:note, "\n", 1), '[["  " . v:val, "NeovimTourNote"]]')
+      let mark.virt_lines_above = v:true
     endif
-  endfor
+    call nvim_buf_set_extmark(buffer, state.namespace, a:first - 1, 0, mark)
+  else
+    call prop_add(a:first, 1, {'type': state.range_type, 'bufnr': buffer, 'end_lnum': last,
+          \ 'end_col': strlen(getbufline(buffer, last)[0]) + 1})
+    for line in reverse(split(a:note, "\n", 1))
+      if line !=# ''
+        call prop_add(a:first, 0, {'type': state.note_type, 'bufnr': buffer, 'text': '  ' . line, 'text_align': 'above'})
+      endif
+    endfor
+  endif
   let state.marked_buffer = buffer
   call win_execute(a:window, 'call cursor(' . a:first . ',1) | normal! zvzz')
   return {'file': bufname(buffer), 'start': a:first, 'finish': last}
@@ -139,7 +157,7 @@ endfunction
 
 function! s:Load(file, allow_missing) abort
   call s:Require(type(a:file) == v:t_string && a:file !=# '', 'A file path is required.')
-  call s:Require(!isdirectory(a:file), 'Path is not a regular file.')
+  call s:Require(index(['', 'file'], getftype(resolve(a:file))) >= 0, 'Path is not a regular file.')
   let buffer = bufadd(a:file)
   call s:Require(filereadable(a:file) || a:allow_missing || bufloaded(buffer), 'File does not exist: ' . a:file)
   call bufload(buffer)
@@ -162,7 +180,8 @@ endfunction
 
 function! s:Git(directory, args) abort
   let command = ['git', '-C', a:directory] + a:args
-  let output = system(join(map(command, 'shellescape(v:val)'), ' '))
+  let invocation = has('nvim') ? command : join(map(command, 'shellescape(v:val)'), ' ')
+  let output = system(invocation)
   return [v:shell_error == 0, output]
 endfunction
 
@@ -261,17 +280,76 @@ function! neovim_tour#Request(args) abort
   endtry
 endfunction
 
+function! neovim_tour#Command(argv, cwd, window) abort
+  try
+    let argv = copy(a:argv)
+    let action = remove(argv, 0)
+    let options = {
+          \ 'state': [], 'read': ['start', 'end'], 'show': ['line', 'end', 'note'],
+          \ 'highlight': ['end', 'note'], 'diff': ['base'], 'clear': []}
+    call s:Require(has_key(options, action), 'Unknown tour command: ' . action)
+    let args = {'action': action, 'window': str2nr(a:window), 'start': 1, 'line': 1,
+          \ 'end': v:null, 'note': '', 'file': v:null, 'base': 'HEAD'}
+    let positional = []
+    let literal = 0
+    while !empty(argv)
+      let argument = remove(argv, 0)
+      if argument ==# '--' && !literal
+        let literal = 1
+      elseif stridx(argument, '--') == 0 && !literal
+        let name = matchstr(argument, '^--\zs[^=]*')
+        call s:Require(index(options[action], name) >= 0, 'Unknown option: ' . argument)
+        if stridx(argument, '=') >= 0
+          let args[name] = strpart(argument, stridx(argument, '=') + 1)
+        else
+          call s:Require(!empty(argv), 'Missing value for ' . argument)
+          let args[name] = remove(argv, 0)
+        endif
+      else
+        call add(positional, argument)
+      endif
+    endwhile
+    if action ==# 'show' || action ==# 'highlight'
+      call s:Require(len(positional) == 1, action . ' requires one argument.')
+      let args[action ==# 'show' ? 'file' : 'start'] = positional[0]
+    elseif action ==# 'diff'
+      call s:Require(len(positional) <= 1, 'diff accepts at most one file.')
+      let args.file = get(positional, 0, v:null)
+    else
+      call s:Require(empty(positional), 'Unexpected argument for ' . action)
+    endif
+    for name in ['start', 'line', 'end']
+      if args[name] isnot v:null
+        let value = type(args[name]) == v:t_number ? string(args[name]) : args[name]
+        call s:Require(value =~# '^[0-9]\+$' && str2nr(value) > 0,
+              \ name . ' must be a positive integer.')
+        let args[name] = str2nr(args[name])
+      endif
+    endfor
+    if args.file isnot v:null
+      let file = args.file =~# '^\~/' ? expand('~') . strpart(args.file, 1) : args.file
+      let args.file = resolve(simplify(file =~# '^/' ? file : a:cwd . '/' . file))
+    endif
+    let response = neovim_tour#Request(args)
+  catch
+    let response = {'ok': v:false, 'error': v:exception}
+  endtry
+  return (response.ok ? '0' : '1') . "\n" . json_encode(response)
+endfunction
+
 function! neovim_tour#Launch(prompt) abort
-  call s:Require(has('clientserver') && has('terminal') && has('textprop'),
-        \ 'MacVim requires +clientserver, +terminal, and +textprop features.')
+  call s:Require(has('nvim') || (has('clientserver') && has('terminal') && has('textprop')),
+        \ 'Vim requires +clientserver, +terminal, and +textprop features.')
   let window = s:Target(win_getid())
   let command = copy(get(g:, 'neovim_tour_codex_cmd', ['codex', '--no-daemon']))
   call s:Require(!empty(command) && executable(command[0]), 'Codex executable was not found on PATH.')
-  if v:servername ==# ''
+  if has('nvim') && v:servername ==# ''
+    call serverstart()
+  elseif v:servername ==# ''
     call remote_startserver('NEOVIM_TOUR_' . getpid())
   endif
   call s:Require(v:servername !=# '', 'No MacVim server. Open the MacVim GUI before starting :Codex.')
-  call add(command, 'Use $neovim-tour. ' . (a:prompt ==# ''
+  call add(command, 'Read and follow ' . s:root . '/skills/neovim-tour/SKILL.md. ' . (a:prompt ==# ''
         \ ? 'Connect to this editor session, inspect the code pane, and ask what I want to explore.' : a:prompt))
   let previous = s:IgnoreNavigation()
   try
@@ -279,10 +357,20 @@ function! neovim_tour#Launch(prompt) abort
     botright vsplit
     enew
     execute 'vertical resize ' . max([20, float2nr(&columns * get(g:, 'neovim_tour_width', 0.42))])
-    let terminal = term_start(command, {'curwin': 1, 'cwd': cwd, 'env': {
-          \ 'NEOVIM_TOUR_EDITOR': 'macvim', 'NEOVIM_TOUR_SERVER': v:servername,
-          \ 'NEOVIM_TOUR_WINDOW': string(window), 'NEOVIM_TOUR_CLI': s:root . '/skills/neovim-tour/scripts/nvim-tour',
-          \ 'NEOVIM_TOUR_VIM': resolve(exepath(v:progpath))}})
+    let env = {'NEOVIM_TOUR_EDITOR': has('nvim') ? 'neovim' : 'macvim', 'NEOVIM_TOUR_SERVER': v:servername,
+          \ 'NEOVIM_TOUR_WINDOW': string(window), 'NEOVIM_TOUR_CLI': s:root . '/skills/neovim-tour/scripts/nvim-tour'}
+    if has('nvim')
+      let env.NEOVIM_TOUR_SOCKET = v:servername
+      let env.NEOVIM_TOUR_NVIM = v:progpath
+      let terminal = jobstart(command, {'term': v:true, 'cwd': cwd, 'env': env})
+    else
+      let env.NEOVIM_TOUR_VIM = resolve(exepath(v:progpath))
+      let backend = index(v:argv, '--clientserver')
+      if backend >= 0
+        let env.VIM_CLIENTSERVER = v:argv[backend + 1]
+      endif
+      let terminal = term_start(command, {'curwin': 1, 'cwd': cwd, 'env': env})
+    endif
     call s:Require(terminal > 0, 'Could not start Codex. Check g:neovim_tour_codex_cmd.')
   finally
     let &eventignore = previous

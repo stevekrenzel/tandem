@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -90,7 +89,7 @@ class VimBackendCases:
         return self.expr("execute(json_decode(%s))" % vim_string(json.dumps(commands, ensure_ascii=False)))
 
     def call(self, *args, success=True):
-        result = subprocess.run([sys.executable, str(CLI), *args], env=self.env, cwd=self.directory,
+        result = subprocess.run([str(CLI), *args], env=self.env, cwd=self.directory,
                                 text=True, capture_output=True, timeout=12)
         self.assertEqual(result.returncode == 0, success, result.stderr or result.stdout)
         return json.loads(result.stdout)
@@ -107,6 +106,15 @@ class VimBackendCases:
         self.assertEqual(result["current_window"], self.terminal)
         self.assertEqual(self.call("read", "--start", "1", "--end", "2")["result"]["lines"],
                          ["not on disk", "line 2"])
+
+    def test_quoted_multiline_notes_are_literal(self):
+        note = "O'Brien\nü \\ $HOME `touch sentinel` $(touch sentinel) ');throw 'injected"
+        self.call("highlight", "2", "--note", note)
+        props = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
+        texts = [prop["text"] for prop in props if "text" in prop]
+        self.assertCountEqual(texts, ["  " + line for line in note.split("\n")])
+        self.assertFalse((self.directory / "sentinel").exists())
+        self.assertFalse(self.expr("getbufvar(%d,'&modified')" % self.buffer))
 
     def test_show_preserves_focus_buffers_options_and_autosave(self):
         self.commands("set nohidden autowrite autowriteall", "let g:leave_count=0",
@@ -217,6 +225,8 @@ class VimBackendCases:
                               "Path(%r).write_text(json.dumps({'argv':sys.argv[1:],'env':dict(os.environ)}))\n"
                               % str(capture))
         executable.chmod(0o755)
+        if not self.use_gui:
+            self.commands("unlet $VIM_CLIENTSERVER")
         self.commands("let g:neovim_tour_codex_cmd=[%s,'--no-daemon']" % vim_string(str(executable)),
                       "call win_gotoid(%d)" % self.source,
                       "Codex Explain the 'quoted' function; do not run shell commands")
@@ -225,12 +235,14 @@ class VimBackendCases:
             time.sleep(0.02)
         self.assertTrue(capture.exists(), "Codex child did not start")
         result = json.loads(capture.read_text())
+        if not self.use_gui:
+            self.assertEqual(result["env"].get("VIM_CLIENTSERVER"), "socket")
         self.assertEqual(result["env"]["NEOVIM_TOUR_EDITOR"], "macvim")
         self.assertEqual(result["env"]["NEOVIM_TOUR_SERVER"], self.server)
         self.assertEqual(result["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
         self.assertEqual(Path(result["env"]["NEOVIM_TOUR_VIM"]).resolve(), Path(self.binary).resolve())
         self.assertEqual(Path(result["env"]["NEOVIM_TOUR_CLI"]).resolve(), CLI)
-        self.assertEqual(result["argv"], ["--no-daemon", "Use $neovim-tour. Explain the 'quoted' function; do not run shell commands"])
+        self.assertEqual(result["argv"], ["--no-daemon", "Read and follow %s. Explain the 'quoted' function; do not run shell commands" % (ROOT / "skills/neovim-tour/SKILL.md")])
 
 
 @unittest.skipUnless("+socketserver" in TERMINAL_FEATURES,

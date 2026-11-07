@@ -1,84 +1,85 @@
-#!/usr/bin/env python3
-"""Control the parent Neovim or MacVim through its built-in remote client."""
+#!/bin/bash
+set -euo pipefail
 
-import argparse
-import json
-import os
-from pathlib import Path
-import subprocess
-import sys
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+quote() { local value=${1//\'/\'\'}; printf -v literal "'%s'" "$value"; }
 
+rpc() (
+  "$@" &
+  request=$!
+  (
+    sleeper=
+    trap '
+      if [[ -n $sleeper ]]; then
+        kill "$sleeper" 2>/dev/null || :
+        wait "$sleeper" 2>/dev/null || :
+      fi
+    ' EXIT
+    command -p sleep 10 &
+    sleeper=$!
+    wait "$sleeper"
+    kill -KILL "$request" 2>/dev/null || :
+  ) >/dev/null 2>&1 &
+  watchdog=$!
+  trap '
+    kill "$request" "$watchdog" 2>/dev/null || :
+    wait "$request" "$watchdog" 2>/dev/null || :
+  ' EXIT
+  wait "$request"
+)
 
-def positive(value):
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return number
+editor=${NEOVIM_TOUR_EDITOR:-}
+if [[ -z $editor ]]; then
+  editor=neovim
+  if [[ -n ${VIM_SERVERNAME:-} && -z ${NVIM:-} ]]; then editor=vim; fi
+fi
+server=${NEOVIM_TOUR_SERVER:-}
+window=${NEOVIM_TOUR_WINDOW:-}
+while (($#)); do
+  case $1 in
+    --editor|--server|--window)
+      (($# >= 2)) || fail "Missing value for $1"
+      case $1 in
+        --editor) editor=$2 ;;
+        --server) server=$2 ;;
+        --window) window=$2 ;;
+      esac
+      shift 2 ;;
+    -h|--help)
+      printf '%s\n' 'Usage: nvim-tour [--editor neovim|vim|macvim] [--server ADDRESS] [--window ID] COMMAND' \
+        'Commands: state | read [--start N] [--end N] | show FILE [--line N] [--end N] [--note TEXT]' \
+        '          highlight N [--end N] [--note TEXT] | diff [FILE] [--base REV] | clear'
+      exit 0 ;;
+    *) break ;;
+  esac
+done
+(($#)) || fail 'A command is required. See --help.'
+[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start with :Codex, or supply --window.'
+case $editor in
+  neovim)
+    server=${server:-${NEOVIM_TOUR_SOCKET:-${NVIM:-}}}
+    client=("${NEOVIM_TOUR_NVIM:-nvim}" --server "$server") ;;
+  vim|macvim)
+    server=${server:-${VIM_SERVERNAME:-}}
+    executable=vim
+    if [[ $editor == macvim ]]; then executable=mvim; fi
+    client=("${NEOVIM_TOUR_VIM:-$executable}" --servername "$server") ;;
+  *) fail "Unknown editor: $editor" ;;
+esac
+[[ -n $server ]] || fail 'No editor connection. Start with :Codex, or supply --server.'
 
-
-def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
-    editor = os.environ.get("NEOVIM_TOUR_EDITOR") or (
-        "macvim" if os.environ.get("VIM_SERVERNAME") and not os.environ.get("NVIM") else "neovim")
-    parser.add_argument("--editor", choices=("neovim", "macvim"), default=editor,
-                        help="editor backend (default: launcher environment)")
-    parser.add_argument("--server", help="Neovim socket or MacVim server name (default: launcher environment)")
-    parser.add_argument("--window", type=positive, default=os.environ.get("NEOVIM_TOUR_WINDOW"),
-                        help="code window ID (default: NEOVIM_TOUR_WINDOW)")
-    commands = parser.add_subparsers(dest="action", required=True)
-    commands.add_parser("state", help="inspect windows, buffers, and code around the target cursor")
-    read = commands.add_parser("read", help="read the target buffer, including unsaved changes")
-    read.add_argument("--start", type=positive, default=1)
-    read.add_argument("--end", type=positive, help="last line, inclusive (default: start + 79)")
-    show = commands.add_parser("show", help="open a file and highlight a range without taking focus")
-    show.add_argument("file")
-    show.add_argument("--line", type=positive, default=1)
-    show.add_argument("--end", type=positive)
-    show.add_argument("--note", default="")
-    highlight = commands.add_parser("highlight", help="highlight lines in the target buffer")
-    highlight.add_argument("start", type=positive)
-    highlight.add_argument("--end", type=positive)
-    highlight.add_argument("--note", default="")
-    diff = commands.add_parser("diff", help="compare the current file or FILE with a Git revision")
-    diff.add_argument("file", nargs="?")
-    diff.add_argument("--base", default="HEAD", help="Git revision (default: HEAD)")
-    commands.add_parser("clear", help="remove this target's tour annotations and diff pane")
-    args = vars(parser.parse_args())
-    # Resolve paths in the caller's working directory, not Neovim's potentially different cwd.
-    if args.get("file"):
-        args["file"] = str(Path(args["file"]).expanduser().resolve())
-    return args
-
-
-def main():
-    args = arguments()
-    editor = args.pop("editor")
-    legacy_server = (os.environ.get("NEOVIM_TOUR_SOCKET") or os.environ.get("NVIM")) if editor == "neovim" else os.environ.get("VIM_SERVERNAME")
-    server = args.pop("server") or os.environ.get("NEOVIM_TOUR_SERVER") or legacy_server
-    if not server:
-        raise ValueError("No editor connection. Start with :Codex, or supply --editor and --server.")
-    if not args["window"]:
-        raise ValueError("No code window. Start with :Codex, or supply --window (see :echo win_getid()).")
-    payload = json.dumps(args, ensure_ascii=False).replace("'", "''")
-    if editor == "neovim":
-        expression = "json_encode(luaeval('require(\"neovim_tour\").request(_A)',json_decode('%s')))" % payload
-        command = [os.environ.get("NEOVIM_TOUR_NVIM", "nvim"), "--server", server]
-    else:
-        expression = "json_encode(neovim_tour#Request(json_decode('%s')))" % payload
-        command = [os.environ.get("NEOVIM_TOUR_VIM", "mvim"), "--servername", server]
-    result = subprocess.run(
-        [*command, "--remote-expr", expression],
-        capture_output=True, text=True, timeout=10, check=False)
-    if result.returncode:
-        raise ValueError("Editor RPC failed. Check the connection and plugin installation. " + result.stderr.strip())
-    response = json.loads(result.stdout)
-    print(json.dumps(response, ensure_ascii=False))
-    return 0 if response.get("ok") else 1
-
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-        print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False))
-        sys.exit(1)
+# Single-quoted Vim literals preserve arbitrary text without executing it.
+expression='neovim_tour#Command(['
+for argument in "$@"; do
+  quote "$argument"
+  expression+="$literal,"
+done
+quote "$PWD"
+expression+="],$literal,"
+quote "$window"
+expression+="$literal)"
+response=$(rpc "${client[@]}" --remote-expr "$expression") || fail 'Editor RPC failed or timed out. Check the connection and plugin installation.'
+status=${response%%$'\n'*}
+[[ $status == 0 || $status == 1 ]] || fail 'Unexpected editor response. Update the plugin and restart the editor.'
+printf '%s\n' "${response#*$'\n'}"
+exit "$status"

@@ -1,15 +1,16 @@
 ---
 name: neovim-tour
-description: Guide a code tour or pull request walkthrough in a live Neovim or MacVim session, opening files, highlighting code, and showing Git diffs while chatting in its Codex terminal. Use when launched with :Codex or asked to walk through code in either editor.
+description: Guide a code tour or pull request walkthrough in a live Neovim, Vim, or MacVim session, opening files, highlighting code, and showing Git diffs while chatting in its Codex terminal. Use when launched with :Codex or asked to walk through code in the connected editor.
 ---
 
 Use the bundled helper to control the connected editor. The launcher supplies the
 editor connection, code window, and helper path; do not build another server or RPC client.
 
 Run the helper as `"$NEOVIM_TOUR_CLI"` when that variable is available. Otherwise
-use the absolute path to `scripts/nvim-tour` beside this skill. It requires Python
-3.9+ and Neovim 0.11+ or MacVim with Vim 9.1+. Every response is JSON: `{ "ok": true, "result": ... }` or
-`{ "ok": false, "error": ... }` with a nonzero exit code.
+use the absolute path to `scripts/nvim-tour` beside this skill. It uses Bash and
+the editor's native remote client. Editor responses are JSON: `{ "ok": true,
+"result": ... }` or `{ "ok": false, "error": ... }` with a nonzero exit code.
+Usage and connection failures go to stderr.
 
 ## Connect and orient
 
@@ -29,8 +30,8 @@ changes, and other windows. Read the live buffer when its contents matter:
 If the connection or window is missing, explain that the user should launch `:Codex`
 from the code window. A closed target is an error, not permission to guess another
 editor. An explicitly selected connection can use global flags before the command:
-`nvim-tour --server /path/to/socket --window 1000 state` for Neovim, or
-`nvim-tour --editor macvim --server VIM --window 1000 state` for MacVim. The
+`"$NEOVIM_TOUR_CLI" --server /path/to/socket --window 1000 state` for Neovim, or
+`"$NEOVIM_TOUR_CLI" --editor macvim --server VIM --window 1000 state` for MacVim. The
 launcher selects the backend and exact editor executable automatically. MacVim
 uses its GUI's native server; don't start a second editor to find a connection.
 
