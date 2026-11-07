@@ -179,6 +179,37 @@ class VimBackendCases:
         self.assertEqual(self.expr("len(getwininfo())"), 3)
         self.assertFalse(self.expr("getwinvar(%d,'&diff')" % self.source))
 
+    def test_shared_buffer_tours_and_global_clear_preserve_other_plugins(self):
+        self.commands("call prop_type_add('OtherPlugin',{'highlight':'Error'})",
+                      "call prop_add(1,1,{'type':'OtherPlugin','bufnr':%d,'length':1})" % self.buffer,
+                      "call win_execute(%d,'leftabove vsplit | let g:second_source=win_getid()')" % self.source)
+        second = self.expr("g:second_source")
+        self.call("highlight", "3", "--note", "first tour")
+        self.call("--window", str(second), "highlight", "5", "--note", "second tour")
+        self.call("clear")
+        properties = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
+        self.assertEqual([p["text"].strip() for p in properties if "text" in p], ["second tour"])
+        self.commands("TourClear")
+        properties = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
+        self.assertEqual([p["type"] for p in properties], ["OtherPlugin"])
+        self.assertEqual(self.expr("win_getid()"), self.terminal)
+
+    def test_default_diff_resolves_a_relatively_opened_buffer(self):
+        self.commands("call win_execute(%d,'edit other.py')" % self.source)
+        result = self.call("diff")["result"]
+        self.assertEqual(Path(result["file"]).resolve(), self.other.resolve())
+        self.assertEqual(self.expr("getbufline(winbufnr(%d),1,'$')" % result["baseline_window"]),
+                         ["other file", "second line"])
+
+    def test_diff_guard_checks_the_target_tab_when_the_terminal_is_elsewhere(self):
+        self.commands("call win_execute(%d,'leftabove vsplit | diffthis')" % self.source,
+                      "tabnew", "call term_start(['sh','-c','cat'],{'curwin':1})")
+        current = self.expr("win_getid()")
+        windows = self.expr("len(getwininfo())")
+        self.call("diff", str(self.file), success=False)
+        self.assertEqual(self.expr("len(getwininfo())"), windows)
+        self.assertEqual(self.expr("win_getid()"), current)
+
     def test_launcher_passes_the_exact_macvim_connection_and_prompt(self):
         capture = self.directory / "launch.json"
         executable = self.directory / "fake codex"

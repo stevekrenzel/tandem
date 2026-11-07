@@ -173,7 +173,7 @@ function! s:InstallBaseline(source, buffer) abort
 endfunction
 
 function! s:Diff(window, file, base) abort
-  let file = a:file is v:null ? bufname(winbufnr(a:window)) : a:file
+  let file = a:file is v:null ? getbufinfo(winbufnr(a:window))[0].name : a:file
   call s:Require(file !=# '', 'The code buffer has no file name.')
   let directory = fnamemodify(file, ':h')
   while !isdirectory(directory)
@@ -200,7 +200,7 @@ function! s:Diff(window, file, base) abort
   let state = s:Session(a:window)
   let tab = win_id2tabwin(a:window)[0]
   for win in getwininfo()
-    if win.tabnr == tab && getwinvar(win.winid, '&diff')
+    if win.tabnr == tab && gettabwinvar(win.tabnr, win.winid, '&diff')
       let own = get(state, 'diff', {})
       let is_tour_window = !empty(own) && (win.winid == own.source || (win.winid == own.window && win.bufnr == own.buffer))
       call s:Require(is_tour_window, 'This tab already contains an unrelated diff. Close that comparison before starting a tour diff.')
