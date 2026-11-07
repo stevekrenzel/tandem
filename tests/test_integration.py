@@ -12,7 +12,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI = ROOT / "skills/neovim-tour/scripts/nvim-tour"
+CLI = ROOT / "skills/tandem/scripts/tandem"
 
 
 @unittest.skipUnless(shutil.which("nvim"), "Neovim is required")
@@ -33,7 +33,7 @@ class EditorTest(unittest.TestCase):
         self.socket = str(self.directory / "n.sock")
         self.env = dict(os.environ, NVIM_LOG_FILE="/dev/null")
         for key in list(self.env):
-            if key.startswith("NEOVIM_TOUR_") or key in ("NVIM", "VIM_SERVERNAME"):
+            if key.startswith("TANDEM_") or key in ("NVIM", "VIM_SERVERNAME"):
                 self.env.pop(key)
         startup = "vim.opt.runtimepath:prepend(%s); vim.o.loadplugins=true" % json.dumps(str(ROOT), ensure_ascii=False)
         self.proc = subprocess.Popen(
@@ -55,8 +55,8 @@ class EditorTest(unittest.TestCase):
             vim.fn.jobstart({'sh', '-c', 'cat'}, {term=true})
             return vim.api.nvim_get_current_win()
         """)
-        self.env.update(NVIM=self.socket, NEOVIM_TOUR_SOCKET=self.socket,
-                        NEOVIM_TOUR_WINDOW=str(self.source))
+        self.env.update(NVIM=self.socket, TANDEM_SOCKET=self.socket,
+                        TANDEM_WINDOW=str(self.source))
 
     def stop(self):
         if self.proc.poll() is None:
@@ -344,7 +344,7 @@ class EditorTest(unittest.TestCase):
                               "Path(%r).write_text(json.dumps({'argv':sys.argv[1:], 'env':dict(os.environ)}))\n"
                               % str(capture))
         executable.chmod(0o755)
-        self.lua("require('neovim_tour').setup({codex_cmd={%s,'--codex-flag'},claude_cmd={%s,'--claude-flag'}}); return true"
+        self.lua("require('tandem').setup({codex_cmd={%s,'--codex-flag'},claude_cmd={%s,'--claude-flag'}}); return true"
                  % (json.dumps(str(executable)), json.dumps(str(executable))))
         for agent in ("codex", "claude"):
             for mode in ("partner", "tour"):
@@ -360,15 +360,15 @@ class EditorTest(unittest.TestCase):
                         self.assertTrue(capture.exists(), "Agent child did not start")
                         launched = json.loads(capture.read_text())
                         self.assertEqual(launched["env"]["NVIM"], self.socket)
-                        self.assertEqual(launched["env"]["NEOVIM_TOUR_SERVER"], self.socket)
-                        self.assertEqual(launched["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
-                        self.assertEqual(launched["env"]["NEOVIM_TOUR_MODE"], mode)
-                        self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_CLI"]), CLI)
-                        self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_NVIM"]).resolve(), Path(shutil.which("nvim")).resolve())
+                        self.assertEqual(launched["env"]["TANDEM_SERVER"], self.socket)
+                        self.assertEqual(launched["env"]["TANDEM_WINDOW"], str(self.source))
+                        self.assertEqual(launched["env"]["TANDEM_MODE"], mode)
+                        self.assertEqual(Path(launched["env"]["TANDEM_CLI"]), CLI)
+                        self.assertEqual(Path(launched["env"]["TANDEM_NVIM"]).resolve(), Path(shutil.which("nvim")).resolve())
                         initial = topic or ("Connect to this editor session, inspect the code pane, and ask what I want to "
                                             + ("explore." if mode == "tour" else "work on."))
                         prompt = "Read and follow %s. Session mode: %s. %s" % (
-                            json.dumps(str(ROOT / "skills/neovim-tour/SKILL.md"), ensure_ascii=False), mode, initial)
+                            json.dumps(str(ROOT / "skills/tandem/SKILL.md"), ensure_ascii=False), mode, initial)
                         self.assertEqual(launched["argv"], ["--" + agent + "-flag", prompt])
                         self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), terminal)
                         self.lua("vim.api.nvim_win_close(%d,true); return true" % terminal)
@@ -393,7 +393,7 @@ class EditorTest(unittest.TestCase):
                     time.sleep(0.01)
                 argv = json.loads(capture.read_text())
                 self.assertEqual(argv[:-1], ["--no-daemon"] if agent == "codex" else [])
-                self.lua("vim.api.nvim_win_close(%d,true); vim.g.neovim_tour_%s_cmd={'/not-installed/%s'}; return true"
+                self.lua("vim.api.nvim_win_close(%d,true); vim.g.tandem_%s_cmd={'/not-installed/%s'}; return true"
                          % (terminal, agent, agent))
                 before = self.lua("return vim.api.nvim_list_wins()")
                 result = self.lua("local ok,err=pcall(vim.cmd,%s); return {ok=ok,error=tostring(err)}"
@@ -410,8 +410,8 @@ class InstallerTest(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         self.data = self.directory / "data"
         self.vim = self.directory / "vim"
-        self.nvim_package = self.data / "site/pack/neovim-tour/start/neovim-tour"
-        self.vim_package = self.vim / "pack/neovim-tour/start/neovim-tour"
+        self.nvim_package = self.data / "site/pack/tandem/start/tandem"
+        self.vim_package = self.vim / "pack/tandem/start/tandem"
 
     def install(self, *args):
         return subprocess.run([str(ROOT / "install.sh"), "--nvim-data-dir", str(self.data),

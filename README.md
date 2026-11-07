@@ -1,4 +1,4 @@
-# Neovim Tour
+# Tandem
 
 Run Codex or Claude Code beside your code in a Neovim, Vim, or MacVim terminal
 split. Work together on coding tasks, or start a guided walkthrough. Both agents
@@ -25,31 +25,31 @@ starting a session. You only need the CLI you plan to use.
 
 Use your usual plugin manager; there are no install hooks or required setup calls.
 These examples use this local checkout. Once you publish the repository, replace
-its local path with `YOUR_GITHUB_USER/neovim-tour`.
+its local path with `YOUR_GITHUB_USER/tandem`.
 
 [lazy.nvim](https://lazy.folke.io/spec) (Neovim):
 
 ```lua
 {
-  dir = vim.fn.expand("~/Projects/neovim-tour"),
-  cmd = { "Codex", "CodexTour", "Claude", "ClaudeTour", "TourClear" },
-  -- Optional: main = "neovim_tour", opts = { width = 0.42 },
+  dir = vim.fn.expand("~/Projects/tandem"),
+  cmd = { "Codex", "CodexTour", "Claude", "ClaudeTour", "TandemClear" },
+  -- Optional: opts = { width = 0.42 },
 }
 ```
 
-For a published repository, replace `dir = ...` with `"YOUR_GITHUB_USER/neovim-tour"`.
+For a published repository, replace `dir = ...` with `"YOUR_GITHUB_USER/tandem"`.
 
 [vim-plug](https://github.com/junegunn/vim-plug) (Vim, MacVim, or Neovim), inside
 `plug#begin()` / `plug#end()`:
 
 ```vim
-Plug '~/Projects/neovim-tour'
+Plug '~/Projects/tandem'
 ```
 
 [packer.nvim](https://github.com/wbthomason/packer.nvim) (Neovim), inside its startup function:
 
 ```lua
-use { vim.fn.expand("~/Projects/neovim-tour") }
+use { vim.fn.expand("~/Projects/tandem") }
 ```
 
 The standard `plugin/`, `autoload/`, and `lua/` layout also works with native
@@ -69,8 +69,8 @@ The script creates one package symlink per editor:
 
 | Editor | Default package location |
 | --- | --- |
-| Neovim | `~/.local/share/nvim/site/pack/neovim-tour/start/neovim-tour` |
-| Vim / MacVim | `~/.vim/pack/neovim-tour/start/neovim-tour` |
+| Neovim | `~/.local/share/nvim/site/pack/tandem/start/tandem` |
+| Vim / MacVim | `~/.vim/pack/tandem/start/tandem` |
 
 It checks all destinations before making changes and never replaces existing
 files. Re-running it is safe. Neovim paths honor `XDG_DATA_HOME` and `NVIM_APPNAME`;
@@ -113,7 +113,7 @@ Notes and highlighting do not edit source text. Navigation preserves unsaved
 buffers, suppresses navigation-triggered autosave hooks, and keeps the agent's
 terminal focused. File-loading and syntax events still run normally.
 
-Run `:TourClear` to remove all annotations and temporary comparison panes, in
+Run `:TandemClear` to remove all annotations and temporary comparison panes, in
 either mode. Close the terminal split normally when finished. Each source window
 has its own session; start an agent from another code window to change targets.
 
@@ -125,15 +125,15 @@ intended base. The plugin does not automatically check out or fetch PRs.
 Defaults work without configuration. Optional Vimscript settings work in both editors:
 
 ```vim
-let g:neovim_tour_codex_cmd = ['codex', '--no-daemon']
-let g:neovim_tour_claude_cmd = ['claude']
-let g:neovim_tour_width = 0.42
+let g:tandem_codex_cmd = ['codex', '--no-daemon']
+let g:tandem_claude_cmd = ['claude']
+let g:tandem_width = 0.42
 ```
 
 Neovim also supports Lua configuration, including lazy.nvim's `opts`:
 
 ```lua
-require("neovim_tour").setup({ width = 0.42 })
+require("tandem").setup({ width = 0.42 })
 ```
 
 Use an absolute executable path if a GUI-launched MacVim cannot find your agent.
@@ -141,19 +141,19 @@ Both modes use the corresponding agent command. A custom command receives one
 appended initial prompt. Keep the process local so its shell tools inherit the
 connection variables; `--no-daemon` does this for Codex. Claude uses its normal
 interactive CLI. The plugin leaves each agent's permission and model settings
-alone. The highlight groups are `NeovimTourRange` and `NeovimTourNote`.
+alone. The highlight groups are `TandemRange` and `TandemNote`.
 
 ## Helper commands
 
 The launcher supplies the bundled helper's absolute path:
 
 ```sh
-"$NEOVIM_TOUR_CLI" state
-"$NEOVIM_TOUR_CLI" read --start 20 --end 80
-"$NEOVIM_TOUR_CLI" show src/server.py --line 24 --end 38 --note "Request entry"
-"$NEOVIM_TOUR_CLI" highlight 45 --end 53 --note "Retry handling"
-"$NEOVIM_TOUR_CLI" diff src/server.py --base HEAD
-"$NEOVIM_TOUR_CLI" clear
+"$TANDEM_CLI" state
+"$TANDEM_CLI" read --start 20 --end 80
+"$TANDEM_CLI" show src/server.py --line 24 --end 38 --note "Request entry"
+"$TANDEM_CLI" highlight 45 --end 53 --note "Retry handling"
+"$TANDEM_CLI" diff src/server.py --base HEAD
+"$TANDEM_CLI" clear
 ```
 
 Editor responses are JSON with `ok` and either `result` or `error`. Errors have
@@ -163,7 +163,7 @@ inclusive. `read` includes unsaved text and defaults to 80 lines. `diff` default
 to the current code buffer and `HEAD`; its baseline is temporary and read-only.
 An added file gets an empty baseline; deleted files also work.
 
-For use outside the agent split, call `skills/neovim-tour/scripts/nvim-tour` from
+For use outside the agent split, call `skills/tandem/scripts/tandem` from
 this checkout with `--editor neovim|vim|macvim --server ADDRESS --window ID` before
 the command. `:echo v:servername` shows the server address; `:echo win_getid()`
 shows the code window ID. The helper refuses a closed or special-buffer target.
@@ -171,12 +171,12 @@ shows the code window ID. The helper refuses a closed or special-buffer target.
 ## Troubleshooting
 
 - **An agent command is unknown:** restart the editor, load the plugin with your manager,
-  or use `:packadd neovim-tour` for a native package. With lazy loading, include
+  or use `:packadd tandem` for a native package. With lazy loading, include
   all four agent commands in the plugin spec as shown above.
 - **Agent executable is missing:** install that CLI and sign in, or set its
-  `g:neovim_tour_codex_cmd` / `g:neovim_tour_claude_cmd` to an absolute path.
+  `g:tandem_codex_cmd` / `g:tandem_claude_cmd` to an absolute path.
 - **Codex rejects `--no-daemon`:** update Codex or configure an older CLI that runs
-  locally with `g:neovim_tour_codex_cmd = ['codex']`.
+  locally with `g:tandem_codex_cmd = ['codex']`.
 - **Connection fails:** start with `:Codex` or `:Claude` from a code window. MacVim's native
   server needs its GUI; terminal Vim needs a compatible remote transport.
   The launcher binds the exact running editor executable, avoiding system Vim.
@@ -196,8 +196,25 @@ Remove the plugin through your plugin manager, or undo the shell installation:
 ```
 
 Use the same custom directory flags as installation. Only links to this checkout
-are removed. Older installations may also have links at `~/.agents/skills/neovim-tour`
-and `~/.local/bin/nvim-tour`; they are no longer needed and can be removed.
+are removed; your source and configuration stay in place.
+
+## Migrating from the development name
+
+If you installed an earlier checkout as `neovim-tour`, remove its old
+plugin-manager entry or package symlink before installing Tandem, so both copies
+do not load. Update any custom configuration and scripts:
+
+| Previous name | Tandem name |
+| --- | --- |
+| `require("neovim_tour")` | `require("tandem")` |
+| `g:neovim_tour_*` | `g:tandem_*` |
+| `NEOVIM_TOUR_*` | `TANDEM_*` |
+| `:TourClear` | `:TandemClear` |
+| `skills/neovim-tour/scripts/nvim-tour` | `skills/tandem/scripts/tandem` |
+
+Very early installations also created links at `~/.agents/skills/neovim-tour`
+and `~/.local/bin/nvim-tour`; those links are no longer needed. Restart the editor
+after switching installations.
 
 ## Develop
 
@@ -205,7 +222,7 @@ Python is used only for the development test suite:
 
 ```sh
 python3 -m unittest discover -s tests -v
-shellcheck install.sh skills/neovim-tour/scripts/nvim-tour
+shellcheck install.sh skills/tandem/scripts/tandem
 ```
 
 Tests use real headless editors, temporary Git repositories, and fake agent

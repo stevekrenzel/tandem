@@ -35,12 +35,12 @@ done
 
 destinations=()
 case $editor in
-  neovim|both) destinations+=("$nvim_data/site/pack/neovim-tour/start/neovim-tour") ;;
+  neovim|both) destinations+=("$nvim_data/site/pack/tandem/start/tandem") ;;
   vim|macvim) ;;
   *) usage >&2; exit 1 ;;
 esac
 case $editor in
-  vim|macvim|both) destinations+=("$vim_dir/pack/neovim-tour/start/neovim-tour") ;;
+  vim|macvim|both) destinations+=("$vim_dir/pack/tandem/start/tandem") ;;
 esac
 
 for destination in "${destinations[@]}"; do

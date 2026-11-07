@@ -34,9 +34,9 @@ class VimBackendCases:
         self.other.write_text("other file\nsecond line\n")
         subprocess.run(["git", "init", "-q"], cwd=self.directory, check=True)
         self.commit("baseline")
-        self.server = ("NEOVIMTOUR_TEST_" + uuid.uuid4().hex[:12].upper()) if self.use_gui else str(self.directory.resolve() / "vim.sock")
-        self.env = dict(os.environ, NEOVIM_TOUR_EDITOR="macvim", NEOVIM_TOUR_SERVER=self.server,
-                        NEOVIM_TOUR_VIM=self.binary, NVIM="/nonexistent/outer-neovim.sock")
+        self.server = ("TANDEM_TEST_" + uuid.uuid4().hex[:12].upper()) if self.use_gui else str(self.directory.resolve() / "vim.sock")
+        self.env = dict(os.environ, TANDEM_EDITOR="macvim", TANDEM_SERVER=self.server,
+                        TANDEM_VIM=self.binary, NVIM="/nonexistent/outer-neovim.sock")
         if self.use_gui:
             self.env.pop("VIM_CLIENTSERVER", None)
         else:
@@ -64,7 +64,7 @@ class VimBackendCases:
         self.buffer = self.expr("bufnr()")
         self.commands("vertical new", "call term_start(['sh','-c','cat'],{'curwin':1})")
         self.terminal = self.expr("win_getid()")
-        self.env["NEOVIM_TOUR_WINDOW"] = str(self.source)
+        self.env["TANDEM_WINDOW"] = str(self.source)
 
     def stop(self):
         if self.proc.poll() is None:
@@ -136,7 +136,7 @@ class VimBackendCases:
         self.call("show", str(self.file), "--line", "10", "--end", "15", "--note", "Tour note")
         props = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
         self.assertTrue(any(p.get("text", "").strip() == "Tour note" for p in props))
-        self.assertTrue(any(p["lnum"] == 15 and p["type"].startswith("NeovimTourRange") for p in props))
+        self.assertTrue(any(p["lnum"] == 15 and p["type"].startswith("TandemRange") for p in props))
         self.assertFalse(self.expr("getbufvar(%d,'&modified')" % self.buffer))
         self.call("clear")
         self.assertEqual([p["type"] for p in self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)],
@@ -197,7 +197,7 @@ class VimBackendCases:
         self.call("clear")
         properties = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
         self.assertEqual([p["text"].strip() for p in properties if "text" in p], ["second tour"])
-        self.commands("TourClear")
+        self.commands("TandemClear")
         properties = self.expr("prop_list(1,{'bufnr':%d,'end_lnum':-1})" % self.buffer)
         self.assertEqual([p["type"] for p in properties], ["OtherPlugin"])
         self.assertEqual(self.expr("win_getid()"), self.terminal)
@@ -228,7 +228,7 @@ class VimBackendCases:
         if not self.use_gui:
             self.commands("unlet $VIM_CLIENTSERVER")
         for agent in ("codex", "claude"):
-            self.commands("let g:neovim_tour_%s_cmd=[%s,'--custom-flag']" % (agent, vim_string(str(executable))))
+            self.commands("let g:tandem_%s_cmd=[%s,'--custom-flag']" % (agent, vim_string(str(executable))))
             for mode in ("partner", "tour"):
                 for topic in ("", "Explain the 'quoted' function; do not run shell commands"):
                     command = agent.title() + ("Tour" if mode == "tour" else "")
@@ -243,16 +243,16 @@ class VimBackendCases:
                         result = json.loads(capture.read_text())
                         if not self.use_gui:
                             self.assertEqual(result["env"].get("VIM_CLIENTSERVER"), "socket")
-                        self.assertEqual(result["env"]["NEOVIM_TOUR_EDITOR"], "macvim")
-                        self.assertEqual(result["env"]["NEOVIM_TOUR_SERVER"], self.server)
-                        self.assertEqual(result["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
-                        self.assertEqual(result["env"]["NEOVIM_TOUR_MODE"], mode)
-                        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_VIM"]).resolve(), Path(self.binary).resolve())
-                        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_CLI"]).resolve(), CLI)
+                        self.assertEqual(result["env"]["TANDEM_EDITOR"], "macvim")
+                        self.assertEqual(result["env"]["TANDEM_SERVER"], self.server)
+                        self.assertEqual(result["env"]["TANDEM_WINDOW"], str(self.source))
+                        self.assertEqual(result["env"]["TANDEM_MODE"], mode)
+                        self.assertEqual(Path(result["env"]["TANDEM_VIM"]).resolve(), Path(self.binary).resolve())
+                        self.assertEqual(Path(result["env"]["TANDEM_CLI"]).resolve(), CLI)
                         initial = topic or ("Connect to this editor session, inspect the code pane, and ask what I want to "
                                             + ("explore." if mode == "tour" else "work on."))
                         prompt = "Read and follow %s. Session mode: %s. %s" % (
-                            json.dumps(str(ROOT / "skills/neovim-tour/SKILL.md"), ensure_ascii=False), mode, initial)
+                            json.dumps(str(ROOT / "skills/tandem/SKILL.md"), ensure_ascii=False), mode, initial)
                         self.assertEqual(result["argv"], ["--custom-flag", prompt])
                         self.assertEqual(self.expr("win_getid()"), terminal)
                         self.commands("call win_execute(%d,'close!')" % terminal)

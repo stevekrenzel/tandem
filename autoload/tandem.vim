@@ -3,11 +3,11 @@ let s:prefix = expand('<SID>')
 let s:sessions = {}
 
 function! s:Highlights() abort
-  highlight default link NeovimTourRange Visual
-  highlight default link NeovimTourNote Special
+  highlight default link TandemRange Visual
+  highlight default link TandemNote Special
 endfunction
 call s:Highlights()
-augroup neovim_tour
+augroup tandem
   autocmd!
   autocmd ColorScheme * call s:Highlights()
 augroup END
@@ -39,11 +39,11 @@ function! s:Session(window) abort
   let key = string(a:window)
   if !has_key(s:sessions, key)
     if has('nvim')
-      let state = {'namespace': nvim_create_namespace('neovim-tour:' . key)}
+      let state = {'namespace': nvim_create_namespace('tandem:' . key)}
     else
-      let state = {'range_type': 'NeovimTourRange_' . key, 'note_type': 'NeovimTourNote_' . key}
-      call prop_type_add(state.range_type, {'highlight': 'NeovimTourRange', 'priority': 150, 'combine': 1})
-      call prop_type_add(state.note_type, {'highlight': 'NeovimTourNote', 'priority': 150})
+      let state = {'range_type': 'TandemRange_' . key, 'note_type': 'TandemNote_' . key}
+      call prop_type_add(state.range_type, {'highlight': 'TandemRange', 'priority': 150, 'combine': 1})
+      call prop_type_add(state.note_type, {'highlight': 'TandemNote', 'priority': 150})
     endif
     let s:sessions[key] = state
   endif
@@ -86,7 +86,7 @@ function! s:Clear(window) abort
   return {'cleared': v:true}
 endfunction
 
-function! neovim_tour#ClearAll() abort
+function! tandem#ClearAll() abort
   let previous = s:IgnoreNavigation()
   try
     for window in keys(s:sessions)
@@ -135,9 +135,9 @@ function! s:Annotate(window, first, last, note) abort
   let state = s:Session(a:window)
   call s:ClearMarks(state)
   if has('nvim')
-    let mark = {'end_row': last, 'end_col': 0, 'hl_group': 'NeovimTourRange', 'hl_eol': v:true, 'priority': 150}
+    let mark = {'end_row': last, 'end_col': 0, 'hl_group': 'TandemRange', 'hl_eol': v:true, 'priority': 150}
     if a:note !=# ''
-      let mark.virt_lines = map(split(a:note, "\n", 1), '[["  " . v:val, "NeovimTourNote"]]')
+      let mark.virt_lines = map(split(a:note, "\n", 1), '[["  " . v:val, "TandemNote"]]')
       let mark.virt_lines_above = v:true
     endif
     call nvim_buf_set_extmark(buffer, state.namespace, a:first - 1, 0, mark)
@@ -228,7 +228,7 @@ function! s:Diff(window, file, base) abort
   let buffer = s:Load(file, exists)
   call s:Clear(a:window)
   call win_execute(a:window, 'call ' . s:prefix . 'Switch(' . buffer . ')')
-  let baseline = bufadd('neovim-tour://' . a:window . '/' . strpart(revision, 0, 8) . '/' . relative)
+  let baseline = bufadd('tandem://' . a:window . '/' . strpart(revision, 0, 8) . '/' . relative)
   call setbufvar(baseline, '&buftype', 'nofile')
   noautocmd call bufload(baseline)
   let lines = split(substitute(content, "\r\n", "\n", 'g'), "\n", 1)
@@ -248,7 +248,7 @@ function! s:Diff(window, file, base) abort
         \ 'working_window': a:window, 'modified': getbufvar(buffer, '&modified') ? v:true : v:false}
 endfunction
 
-function! neovim_tour#Request(args) abort
+function! tandem#Request(args) abort
   let previous = s:IgnoreNavigation()
   try
     let window = s:Target(a:args.window)
@@ -280,7 +280,7 @@ function! neovim_tour#Request(args) abort
   endtry
 endfunction
 
-function! neovim_tour#Command(argv, cwd, window) abort
+function! tandem#Command(argv, cwd, window) abort
   try
     let argv = copy(a:argv)
     let action = remove(argv, 0)
@@ -330,54 +330,54 @@ function! neovim_tour#Command(argv, cwd, window) abort
       let file = args.file =~# '^\~/' ? expand('~') . strpart(args.file, 1) : args.file
       let args.file = resolve(simplify(file =~# '^/' ? file : a:cwd . '/' . file))
     endif
-    let response = neovim_tour#Request(args)
+    let response = tandem#Request(args)
   catch
     let response = {'ok': v:false, 'error': v:exception}
   endtry
   return (response.ok ? '0' : '1') . "\n" . json_encode(response)
 endfunction
 
-function! neovim_tour#Launch(agent, mode, prompt) abort
+function! tandem#Launch(agent, mode, prompt) abort
   call s:Require(has('nvim') || (has('clientserver') && has('terminal') && has('textprop')),
         \ 'Vim requires +clientserver, +terminal, and +textprop features.')
   let window = s:Target(win_getid())
   let defaults = {'codex': ['codex', '--no-daemon'], 'claude': ['claude']}
-  let command = copy(get(g:, 'neovim_tour_' . a:agent . '_cmd', defaults[a:agent]))
+  let command = copy(get(g:, 'tandem_' . a:agent . '_cmd', defaults[a:agent]))
   let name = a:agent ==# 'codex' ? 'Codex' : 'Claude'
   call s:Require(!empty(command) && executable(command[0]), name . ' executable was not found on PATH.')
   if has('nvim') && v:servername ==# ''
     call serverstart()
   elseif v:servername ==# ''
-    call remote_startserver('NEOVIM_TOUR_' . getpid())
+    call remote_startserver('TANDEM_' . getpid())
   endif
   call s:Require(v:servername !=# '', 'No Vim server. Start MacVim in its GUI or terminal Vim with a working remote transport.')
   let initial = a:prompt ==# ''
         \ ? 'Connect to this editor session, inspect the code pane, and ask what I want to '
         \   . (a:mode ==# 'tour' ? 'explore.' : 'work on.') : a:prompt
-  call add(command, 'Read and follow ' . json_encode(s:root . '/skills/neovim-tour/SKILL.md')
+  call add(command, 'Read and follow ' . json_encode(s:root . '/skills/tandem/SKILL.md')
         \ . '. Session mode: ' . a:mode . '. ' . initial)
   let previous = s:IgnoreNavigation()
   try
     let cwd = getcwd()
     botright vsplit
     enew
-    execute 'vertical resize ' . max([20, float2nr(&columns * get(g:, 'neovim_tour_width', 0.42))])
-    let env = {'NEOVIM_TOUR_EDITOR': has('nvim') ? 'neovim' : 'macvim', 'NEOVIM_TOUR_SERVER': v:servername,
-          \ 'NEOVIM_TOUR_WINDOW': string(window), 'NEOVIM_TOUR_CLI': s:root . '/skills/neovim-tour/scripts/nvim-tour',
-          \ 'NEOVIM_TOUR_MODE': a:mode}
+    execute 'vertical resize ' . max([20, float2nr(&columns * get(g:, 'tandem_width', 0.42))])
+    let env = {'TANDEM_EDITOR': has('nvim') ? 'neovim' : 'macvim', 'TANDEM_SERVER': v:servername,
+          \ 'TANDEM_WINDOW': string(window), 'TANDEM_CLI': s:root . '/skills/tandem/scripts/tandem',
+          \ 'TANDEM_MODE': a:mode}
     if has('nvim')
-      let env.NEOVIM_TOUR_SOCKET = v:servername
-      let env.NEOVIM_TOUR_NVIM = v:progpath
+      let env.TANDEM_SOCKET = v:servername
+      let env.TANDEM_NVIM = v:progpath
       let terminal = jobstart(command, {'term': v:true, 'cwd': cwd, 'env': env})
     else
-      let env.NEOVIM_TOUR_VIM = resolve(exepath(v:progpath))
+      let env.TANDEM_VIM = resolve(exepath(v:progpath))
       let backend = index(v:argv, '--clientserver')
       if backend >= 0
         let env.VIM_CLIENTSERVER = v:argv[backend + 1]
       endif
       let terminal = term_start(command, {'curwin': 1, 'cwd': cwd, 'env': env})
     endif
-    call s:Require(terminal > 0, 'Could not start ' . name . '. Check g:neovim_tour_' . a:agent . '_cmd.')
+    call s:Require(terminal > 0, 'Could not start ' . name . '. Check g:tandem_' . a:agent . '_cmd.')
   finally
     let &eventignore = previous
   endtry
