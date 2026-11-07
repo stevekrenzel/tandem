@@ -29,7 +29,7 @@ endfunction
 
 function! s:Target(window) abort
   call s:Require(type(a:window) == v:t_number && win_id2tabwin(a:window) !=# [0, 0],
-        \ 'Code window was closed. Start :Codex from a code window again.')
+        \ 'Code window was closed. Start :Codex or :Claude from a code window again.')
   let buffer = winbufnr(a:window)
   call s:Require(getbufvar(buffer, '&buftype') ==# '', 'The target must be a code window, not a terminal or special buffer.')
   return a:window
@@ -337,20 +337,25 @@ function! neovim_tour#Command(argv, cwd, window) abort
   return (response.ok ? '0' : '1') . "\n" . json_encode(response)
 endfunction
 
-function! neovim_tour#Launch(prompt) abort
+function! neovim_tour#Launch(agent, mode, prompt) abort
   call s:Require(has('nvim') || (has('clientserver') && has('terminal') && has('textprop')),
         \ 'Vim requires +clientserver, +terminal, and +textprop features.')
   let window = s:Target(win_getid())
-  let command = copy(get(g:, 'neovim_tour_codex_cmd', ['codex', '--no-daemon']))
-  call s:Require(!empty(command) && executable(command[0]), 'Codex executable was not found on PATH.')
+  let defaults = {'codex': ['codex', '--no-daemon'], 'claude': ['claude']}
+  let command = copy(get(g:, 'neovim_tour_' . a:agent . '_cmd', defaults[a:agent]))
+  let name = a:agent ==# 'codex' ? 'Codex' : 'Claude'
+  call s:Require(!empty(command) && executable(command[0]), name . ' executable was not found on PATH.')
   if has('nvim') && v:servername ==# ''
     call serverstart()
   elseif v:servername ==# ''
     call remote_startserver('NEOVIM_TOUR_' . getpid())
   endif
-  call s:Require(v:servername !=# '', 'No MacVim server. Open the MacVim GUI before starting :Codex.')
-  call add(command, 'Read and follow ' . s:root . '/skills/neovim-tour/SKILL.md. ' . (a:prompt ==# ''
-        \ ? 'Connect to this editor session, inspect the code pane, and ask what I want to explore.' : a:prompt))
+  call s:Require(v:servername !=# '', 'No Vim server. Start MacVim in its GUI or terminal Vim with a working remote transport.')
+  let initial = a:prompt ==# ''
+        \ ? 'Connect to this editor session, inspect the code pane, and ask what I want to '
+        \   . (a:mode ==# 'tour' ? 'explore.' : 'work on.') : a:prompt
+  call add(command, 'Read and follow ' . json_encode(s:root . '/skills/neovim-tour/SKILL.md')
+        \ . '. Session mode: ' . a:mode . '. ' . initial)
   let previous = s:IgnoreNavigation()
   try
     let cwd = getcwd()
@@ -358,7 +363,8 @@ function! neovim_tour#Launch(prompt) abort
     enew
     execute 'vertical resize ' . max([20, float2nr(&columns * get(g:, 'neovim_tour_width', 0.42))])
     let env = {'NEOVIM_TOUR_EDITOR': has('nvim') ? 'neovim' : 'macvim', 'NEOVIM_TOUR_SERVER': v:servername,
-          \ 'NEOVIM_TOUR_WINDOW': string(window), 'NEOVIM_TOUR_CLI': s:root . '/skills/neovim-tour/scripts/nvim-tour'}
+          \ 'NEOVIM_TOUR_WINDOW': string(window), 'NEOVIM_TOUR_CLI': s:root . '/skills/neovim-tour/scripts/nvim-tour',
+          \ 'NEOVIM_TOUR_MODE': a:mode}
     if has('nvim')
       let env.NEOVIM_TOUR_SOCKET = v:servername
       let env.NEOVIM_TOUR_NVIM = v:progpath
@@ -371,7 +377,7 @@ function! neovim_tour#Launch(prompt) abort
       endif
       let terminal = term_start(command, {'curwin': 1, 'cwd': cwd, 'env': env})
     endif
-    call s:Require(terminal > 0, 'Could not start Codex. Check g:neovim_tour_codex_cmd.')
+    call s:Require(terminal > 0, 'Could not start ' . name . '. Check g:neovim_tour_' . a:agent . '_cmd.')
   finally
     let &eventignore = previous
   endtry

@@ -336,30 +336,71 @@ class EditorTest(unittest.TestCase):
         self.assertEqual(first_marks, [])
         self.assertEqual(len(second_marks), 1)
 
-    def test_launcher_passes_the_socket_window_helper_and_prompt(self):
+    def test_launchers_pass_the_connection_agent_mode_and_literal_prompt(self):
         capture = self.directory / "launch.json"
-        executable = self.directory / "fake codex"
+        executable = self.directory / "fake agent"
         executable.write_text("#!/usr/bin/env python3\nimport json,os,sys\n"
                               "from pathlib import Path\n"
                               "Path(%r).write_text(json.dumps({'argv':sys.argv[1:], 'env':dict(os.environ)}))\n"
                               % str(capture))
         executable.chmod(0o755)
-        self.lua("""
-            require('neovim_tour').setup({codex_cmd={%s,'--no-daemon'}})
-            vim.api.nvim_set_current_win(%d)
-            vim.cmd([[Codex Explain the 'quoted' function; don't execute shell commands]])
-            return true
-        """ % (json.dumps(str(executable)), self.source))
-        deadline = time.monotonic() + 5
-        while not capture.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertTrue(capture.exists(), "Codex child did not start")
-        launched = json.loads(capture.read_text())
-        self.assertEqual(launched["env"]["NVIM"], self.socket)
-        self.assertEqual(launched["env"]["NEOVIM_TOUR_SOCKET"], self.socket)
-        self.assertEqual(launched["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
-        self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_CLI"]), CLI)
-        self.assertEqual(launched["argv"], ["--no-daemon", "Read and follow %s. Explain the 'quoted' function; don't execute shell commands" % (ROOT / "skills/neovim-tour/SKILL.md")])
+        self.lua("require('neovim_tour').setup({codex_cmd={%s,'--codex-flag'},claude_cmd={%s,'--claude-flag'}}); return true"
+                 % (json.dumps(str(executable)), json.dumps(str(executable))))
+        for agent in ("codex", "claude"):
+            for mode in ("partner", "tour"):
+                for topic in ("", "Explain the 'quoted' function; don't execute shell commands"):
+                    command = agent.title() + ("Tour" if mode == "tour" else "")
+                    with self.subTest(command=command, topic=topic):
+                        capture.unlink(missing_ok=True)
+                        terminal = self.lua("vim.api.nvim_set_current_win(%d); vim.cmd(%s); return vim.api.nvim_get_current_win()"
+                                            % (self.source, json.dumps(command + " " + topic)))
+                        deadline = time.monotonic() + 5
+                        while not capture.exists() and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        self.assertTrue(capture.exists(), "Agent child did not start")
+                        launched = json.loads(capture.read_text())
+                        self.assertEqual(launched["env"]["NVIM"], self.socket)
+                        self.assertEqual(launched["env"]["NEOVIM_TOUR_SERVER"], self.socket)
+                        self.assertEqual(launched["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
+                        self.assertEqual(launched["env"]["NEOVIM_TOUR_MODE"], mode)
+                        self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_CLI"]), CLI)
+                        self.assertEqual(Path(launched["env"]["NEOVIM_TOUR_NVIM"]).resolve(), Path(shutil.which("nvim")).resolve())
+                        initial = topic or ("Connect to this editor session, inspect the code pane, and ask what I want to "
+                                            + ("explore." if mode == "tour" else "work on."))
+                        prompt = "Read and follow %s. Session mode: %s. %s" % (
+                            json.dumps(str(ROOT / "skills/neovim-tour/SKILL.md"), ensure_ascii=False), mode, initial)
+                        self.assertEqual(launched["argv"], ["--" + agent + "-flag", prompt])
+                        self.assertEqual(self.lua("return vim.api.nvim_get_current_win()"), terminal)
+                        self.lua("vim.api.nvim_win_close(%d,true); return true" % terminal)
+
+    def test_default_agent_commands_and_missing_executable(self):
+        capture = self.directory / "launch.json"
+        tools = self.directory / "tools"
+        tools.mkdir()
+        for agent in ("codex", "claude"):
+            executable = tools / agent
+            executable.write_text("#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n"
+                                  "Path(%r).write_text(json.dumps(sys.argv[1:]))\n" % str(capture))
+            executable.chmod(0o755)
+        self.lua("vim.env.PATH=%s .. ':' .. vim.env.PATH; return true" % json.dumps(str(tools)))
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                capture.unlink(missing_ok=True)
+                terminal = self.lua("vim.api.nvim_set_current_win(%d); vim.cmd(%s); return vim.api.nvim_get_current_win()"
+                                    % (self.source, json.dumps(agent.title() + " Help me code")))
+                deadline = time.monotonic() + 5
+                while not capture.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                argv = json.loads(capture.read_text())
+                self.assertEqual(argv[:-1], ["--no-daemon"] if agent == "codex" else [])
+                self.lua("vim.api.nvim_win_close(%d,true); vim.g.neovim_tour_%s_cmd={'/not-installed/%s'}; return true"
+                         % (terminal, agent, agent))
+                before = self.lua("return vim.api.nvim_list_wins()")
+                result = self.lua("local ok,err=pcall(vim.cmd,%s); return {ok=ok,error=tostring(err)}"
+                                  % json.dumps(agent.title()))
+                self.assertFalse(result["ok"])
+                self.assertIn(agent.title() + " executable was not found", result["error"])
+                self.assertEqual(self.lua("return vim.api.nvim_list_wins()"), before)
 
 
 class InstallerTest(unittest.TestCase):

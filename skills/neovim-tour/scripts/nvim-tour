@@ -54,7 +54,7 @@ while (($#)); do
   esac
 done
 (($#)) || fail 'A command is required. See --help.'
-[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start with :Codex, or supply --window.'
+[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start with :Codex or :Claude, or supply --window.'
 case $editor in
   neovim)
     server=${server:-${NEOVIM_TOUR_SOCKET:-${NVIM:-}}}
@@ -66,7 +66,7 @@ case $editor in
     client=("${NEOVIM_TOUR_VIM:-$executable}" --servername "$server") ;;
   *) fail "Unknown editor: $editor" ;;
 esac
-[[ -n $server ]] || fail 'No editor connection. Start with :Codex, or supply --server.'
+[[ -n $server ]] || fail 'No editor connection. Start with :Codex or :Claude, or supply --server.'
 
 # Single-quoted Vim literals preserve arbitrary text without executing it.
 expression='neovim_tour#Command(['

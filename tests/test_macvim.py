@@ -218,31 +218,44 @@ class VimBackendCases:
         self.assertEqual(self.expr("len(getwininfo())"), windows)
         self.assertEqual(self.expr("win_getid()"), current)
 
-    def test_launcher_passes_the_exact_macvim_connection_and_prompt(self):
+    def test_launchers_pass_the_exact_connection_agent_mode_and_prompt(self):
         capture = self.directory / "launch.json"
-        executable = self.directory / "fake codex"
+        executable = self.directory / "fake agent"
         executable.write_text("#!/usr/bin/env python3\nimport json,os,sys\nfrom pathlib import Path\n"
                               "Path(%r).write_text(json.dumps({'argv':sys.argv[1:],'env':dict(os.environ)}))\n"
                               % str(capture))
         executable.chmod(0o755)
         if not self.use_gui:
             self.commands("unlet $VIM_CLIENTSERVER")
-        self.commands("let g:neovim_tour_codex_cmd=[%s,'--no-daemon']" % vim_string(str(executable)),
-                      "call win_gotoid(%d)" % self.source,
-                      "Codex Explain the 'quoted' function; do not run shell commands")
-        deadline = time.monotonic() + 5
-        while not capture.exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(capture.exists(), "Codex child did not start")
-        result = json.loads(capture.read_text())
-        if not self.use_gui:
-            self.assertEqual(result["env"].get("VIM_CLIENTSERVER"), "socket")
-        self.assertEqual(result["env"]["NEOVIM_TOUR_EDITOR"], "macvim")
-        self.assertEqual(result["env"]["NEOVIM_TOUR_SERVER"], self.server)
-        self.assertEqual(result["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
-        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_VIM"]).resolve(), Path(self.binary).resolve())
-        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_CLI"]).resolve(), CLI)
-        self.assertEqual(result["argv"], ["--no-daemon", "Read and follow %s. Explain the 'quoted' function; do not run shell commands" % (ROOT / "skills/neovim-tour/SKILL.md")])
+        for agent in ("codex", "claude"):
+            self.commands("let g:neovim_tour_%s_cmd=[%s,'--custom-flag']" % (agent, vim_string(str(executable))))
+            for mode in ("partner", "tour"):
+                for topic in ("", "Explain the 'quoted' function; do not run shell commands"):
+                    command = agent.title() + ("Tour" if mode == "tour" else "")
+                    with self.subTest(command=command, topic=topic):
+                        capture.unlink(missing_ok=True)
+                        self.commands("call win_gotoid(%d)" % self.source, command + " " + topic)
+                        terminal = self.expr("win_getid()")
+                        deadline = time.monotonic() + 5
+                        while not capture.exists() and time.monotonic() < deadline:
+                            time.sleep(0.02)
+                        self.assertTrue(capture.exists(), "Agent child did not start")
+                        result = json.loads(capture.read_text())
+                        if not self.use_gui:
+                            self.assertEqual(result["env"].get("VIM_CLIENTSERVER"), "socket")
+                        self.assertEqual(result["env"]["NEOVIM_TOUR_EDITOR"], "macvim")
+                        self.assertEqual(result["env"]["NEOVIM_TOUR_SERVER"], self.server)
+                        self.assertEqual(result["env"]["NEOVIM_TOUR_WINDOW"], str(self.source))
+                        self.assertEqual(result["env"]["NEOVIM_TOUR_MODE"], mode)
+                        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_VIM"]).resolve(), Path(self.binary).resolve())
+                        self.assertEqual(Path(result["env"]["NEOVIM_TOUR_CLI"]).resolve(), CLI)
+                        initial = topic or ("Connect to this editor session, inspect the code pane, and ask what I want to "
+                                            + ("explore." if mode == "tour" else "work on."))
+                        prompt = "Read and follow %s. Session mode: %s. %s" % (
+                            json.dumps(str(ROOT / "skills/neovim-tour/SKILL.md"), ensure_ascii=False), mode, initial)
+                        self.assertEqual(result["argv"], ["--custom-flag", prompt])
+                        self.assertEqual(self.expr("win_getid()"), terminal)
+                        self.commands("call win_execute(%d,'close!')" % terminal)
 
 
 @unittest.skipUnless("+socketserver" in TERMINAL_FEATURES,

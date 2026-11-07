@@ -60,4 +60,4 @@ for destination in "${destinations[@]}"; do
   fi
   printf '%s\n' "$destination"
 done
-if ! $uninstall; then printf 'Open your editor, then run :Codex from a code window.\n'; fi
+if ! $uninstall; then printf 'Open your editor, then run :Codex or :Claude from a code window.\n'; fi
