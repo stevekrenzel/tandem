@@ -1,5 +1,6 @@
-" Tandem runs a coding agent beside a code window. The agent drives that
-" window through the bundled `tandem` helper, which calls tandem#Command().
+" Tandem runs a coding agent beside a code window. The agent drives the editor
+" from its own window, which starts as that one, through the bundled `tandem`
+" helper, which calls tandem#Command().
 
 let s:root = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
 let s:skill = s:root . '/skills/tandem/SKILL.md'
@@ -343,6 +344,8 @@ function! s:ShowAgent(buffer) abort
   botright vsplit
   execute 'buffer' a:buffer
   execute 'vertical resize' s:Width()
+  " Splits elsewhere, the user's or the agent's, leave the pane's width alone.
+  setlocal winfixwidth
 endfunction
 
 function! s:Type(buffer, text) abort
@@ -389,12 +392,18 @@ endfunction
 " Claude takes the instructions as a system prompt and its permission to run
 " the helper as session settings, which add to the user's own settings.
 " Codex has no per-session equivalent, so it reads the instructions file.
+"
+" Only the helper's display commands are allowed up front. tandem ex can do
+" anything the editor can, including run shell commands, so it goes through
+" the user's usual approval, which they can make permanent. The helper runs
+" outside Claude's sandbox, where those rules apply; sandboxed commands are
+" approved automatically and must not reach the editor at all.
+let s:display_commands = ['state', 'read', 'show', 'highlight', 'diff', 'clear']
+
 function! s:AgentArguments(agent, mode, ask) abort
   if a:agent ==# 'claude'
-    let settings = {'permissions': {'allow': ['Bash(tandem *)']}}
-    if v:servername =~# '^/'
-      let settings.sandbox = {'network': {'allowUnixSockets': [v:servername]}}
-    endif
+    let settings = {'permissions': {'allow': map(copy(s:display_commands), '"Bash(tandem " . v:val . " *)"')},
+          \ 'sandbox': {'excludedCommands': ['tandem *']}}
     " After --, a prompt that starts with a dash is not read as an option.
     return ['--append-system-prompt', s:Instructions(a:mode), '--settings', json_encode(settings), '--', a:ask]
   endif
@@ -434,6 +443,7 @@ function! s:StartAgent(state, window, agent, command, width) abort
   let placeholder = bufnr()
   try
     execute 'vertical resize' a:width
+    setlocal winfixwidth
     if has('nvim')
       call extend(options, {'term': v:true, 'on_exit': function('s:AgentExited', [pane])})
       call s:Require(jobstart(a:command, options) > 0, 'Could not start ' . a:command[0] . '.')
@@ -497,7 +507,10 @@ let s:commands = {
       \ 'show': {'options': ['start', 'end', 'note'], 'file': 'required'},
       \ 'highlight': {'options': ['start', 'end', 'note'], 'file': 'none'},
       \ 'diff': {'options': ['base'], 'file': 'optional'},
-      \ 'clear': {'options': [], 'file': 'none'}}
+      \ 'clear': {'options': [], 'file': 'none'},
+      \ 'ex': {'options': [], 'file': 'none'}}
+" Requests that work in any window. The rest need a window that shows a file.
+let s:anywhere = ['state', 'clear', 'ex']
 
 " Entry point for the helper, which names the agent's session. Returns the
 " exit status on the first line and the JSON response on the second.
@@ -520,6 +533,13 @@ function! s:Parse(argv, cwd, session) abort
   let spec = s:commands[action]
   let args = {'action': action, 'session': str2nr(a:session), 'file': v:null,
         \ 'start': v:null, 'end': v:null, 'note': '', 'base': 'HEAD'}
+  if action ==# 'ex'
+    " The command is everything after ex, as typed after : in the editor.
+    let words = a:argv[1:]
+    let args.command = join(get(words, 0, '') ==# '--' ? words[1:] : words)
+    call s:Require(trim(args.command) !=# '', 'ex requires a command, such as: tandem ex vsplit other.py')
+    return args
+  endif
   let positional = []
   let rest = a:argv[1:]
   let literal = 0
@@ -561,12 +581,12 @@ function! s:Parse(argv, cwd, session) abort
 endfunction
 
 function! s:Run(args) abort
-  let window = s:Target(a:args.session)
-  call s:Refresh(winbufnr(window))
   let action = a:args.action
+  let window = s:Target(a:args.session, action)
+  call s:Refresh(winbufnr(window))
   " Insert mode, a half-typed command, or a pending operator would land in
   " whatever the code window shows next.
-  if index(['show', 'highlight', 'diff'], action) >= 0
+  if index(['show', 'highlight', 'diff', 'ex'], action) >= 0
     call s:Require(win_getid() != window || mode(1) ==# 'n',
           \ 'The user is typing in the code window. Wait, or ask before moving it.')
   endif
@@ -575,14 +595,76 @@ function! s:Run(args) abort
   endif
   " Loading a hidden buffer, as bufload() and setbufvar() do, from a focused
   " Neovim terminal resizes that terminal to the whole screen. Act from the
-  " code window instead.
+  " code window instead. The user's own window and mode stay as they were.
   let result = v:null
-  call win_execute(window, 'let result = ' . s:sid . 'Act(window, a:args)')
+  let s:ex_window = 0
+  let [user, previous] = [win_getid(), win_getid(winnr('#'))]
+  try
+    call win_execute(window, 'let result = ' . s:sid . 'Act(window, a:args)')
+  finally
+    " Like the user's cursor, the agent's window moves with its commands,
+    " even ones that fail partway.
+    if s:ex_window
+      let window = s:Follow(window, s:ex_window)
+    endif
+    call s:KeepPrevious(user, previous)
+  endtry
+  if action ==# 'ex'
+    let result.window = window
+    let result.file = s:Path(winbufnr(window))
+    let result.cursor = getcurpos(window)[1:2]
+  endif
   return result
 endfunction
 
+" Runs inside the agent's window, as if the user had typed the command there.
+" Each line is a separate command. Output is captured instead of shown.
+function! s:Ex(command) abort
+  try
+    let output = execute(split(a:command, "\n"), 'silent')
+  finally
+    let s:ex_window = win_getid()
+  endtry
+  return {'output': substitute(output, '^\n\+', '', '')}
+endfunction
+
+" Moves a session to the window its command ended in, unless that window is
+" a terminal, a floating or special window, or another agent's. Returns the
+" session's window.
+function! s:Follow(window, final) abort
+  if a:final == a:window || !s:CanWorkIn(a:final)
+    return a:window
+  endif
+  let state = s:Session(a:window)
+  let other = s:Find(a:final)
+  if !empty(other) && other isnot state
+    return a:window
+  endif
+  let state.window = a:final
+  return a:final
+endfunction
+
+" Switching windows inside win_execute() changes the window that the user's
+" CTRL-W p goes back to. Restore it; the user stays in their window and mode.
+function! s:KeepPrevious(user, previous) abort
+  if a:previous == 0 || win_getid() != a:user || win_getid(winnr('#')) == a:previous
+        \ || win_id2tabwin(a:previous)[0] != tabpagenr()
+    return
+  endif
+  noautocmd call win_gotoid(a:previous)
+  noautocmd call win_gotoid(a:user)
+endfunction
+
+" Whether an agent can work in a window: any ordinary window but a terminal.
+function! s:CanWorkIn(window) abort
+  return win_id2tabwin(a:window) != [0, 0] && win_gettype(a:window) ==# ''
+        \ && getbufvar(winbufnr(a:window), '&buftype') !=# 'terminal'
+endfunction
+
 function! s:Act(window, args) abort
-  if a:args.action ==# 'read'
+  if a:args.action ==# 'ex'
+    return s:Ex(a:args.command)
+  elseif a:args.action ==# 'read'
     return s:Read(a:window, a:args.file, a:args.start, a:args.end)
   elseif a:args.action ==# 'show'
     return s:Show(a:window, a:args.file, a:args.start, a:args.end, a:args.note)
@@ -595,14 +677,35 @@ function! s:Act(window, args) abort
 endfunction
 
 " Returns a session's code window. Without a session, the key is a window ID.
-function! s:Target(key) abort
+function! s:Target(key, action) abort
   let state = get(s:sessions, string(a:key), {})
   let window = get(state, 'window', a:key)
+  if win_id2tabwin(window) == [0, 0] && s:AgentRunning(state)
+    let window = s:Replacement(state)
+  endif
   let command = has_key(state, 'agent') ? ':' . s:agents[state.agent].name : ':Claude or :Codex'
   call s:Require(win_id2tabwin(window) != [0, 0],
-        \ 'The user closed the code window. Ask them to run ' . command . ' to give you a new one.')
-  call s:Require(s:IsCodeWindow(window), 'The code window is showing a terminal or special buffer.')
+        \ 'The code window was closed. Ask the user to run ' . command . ' to give you a new one.')
+  call s:Require(index(s:anywhere, a:action) >= 0 || s:IsCodeWindow(window),
+        \ 'The code window is showing a terminal or special buffer. Use tandem ex to move to a file''s window.')
   return window
+endfunction
+
+" When the user closes an agent's window, the agent moves to the window the
+" user is in, the one they were in before, or another file's window, in the
+" tab that shows the agent. Returns 0 if there is none.
+function! s:Replacement(state) abort
+  let panes = win_findbuf(a:state.terminal)
+  let tab = empty(panes) ? tabpagenr() : win_id2tabwin(panes[0])[0]
+  let candidates = [win_getid(), win_getid(winnr('#'))] + map(getwininfo(), 'v:val.winid')
+  for window in candidates
+    if window && win_id2tabwin(window)[0] == tab && s:IsCodeWindow(window) && empty(s:Find(window))
+      call s:Quietly({-> s:ClearSession(a:state)})
+      let a:state.window = window
+      return window
+    endif
+  endfor
+  return 0
 endfunction
 
 " Reloads a buffer without unsaved changes when its file changed on disk, so
@@ -625,10 +728,14 @@ function! s:Refresh(buffer) abort
   endtry
 endfunction
 
+" Describes the editor: the agent's window, where the user is, every window
+" with its file, position, and size, and the user's tab's layout.
 function! s:State(window) abort
   let windows = []
   for info in getwininfo()
-    call add(windows, {'id': info.winid, 'buffer': info.bufnr, 'tab': info.tabnr, 'cursor': getcurpos(info.winid)[1:2]})
+    call add(windows, {'id': info.winid, 'tab': info.tabnr, 'buffer': info.bufnr, 'file': s:Path(info.bufnr),
+          \ 'cursor': getcurpos(info.winid)[1:2], 'row': info.winrow, 'col': info.wincol,
+          \ 'width': info.width, 'height': info.height})
   endfor
   let buffers = []
   for info in getbufinfo({'bufloaded': 1})
@@ -639,7 +746,8 @@ function! s:State(window) abort
   let agent = get(s:Find(a:window), 'terminal', -1)
   let focus = current == a:window ? 'code' : winbufnr(current) == agent ? 'agent' : 'other'
   let cursor = getcurpos(a:window)[1:2]
-  return {'target': a:window, 'current_window': current, 'focus': focus, 'mode': mode(),
+  return {'target': a:window, 'current_window': current, 'previous_window': win_getid(winnr('#')),
+        \ 'focus': focus, 'mode': mode(), 'tab': tabpagenr(), 'layout': winlayout(),
         \ 'cwd': s:Cwd(a:window), 'cursor': cursor, 'windows': windows, 'buffers': buffers,
         \ 'context': s:Read(a:window, v:null, max([1, cursor[0] - 8]), cursor[0] + 12)}
 endfunction

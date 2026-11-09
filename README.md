@@ -1,8 +1,9 @@
 # Tandem
 
 Work with Claude Code or Codex inside Neovim, Vim, or MacVim. The agent runs in
-a split beside your code and sees what you see: it reads your unsaved buffers,
-opens files, highlights code with notes, and shows Git comparisons.
+a split beside your code and shares the editor with you as an equal: it reads
+your unsaved buffers, opens files and splits, runs any command you could type
+after `:`, highlights code with notes, and shows Git comparisons.
 
 ![:ClaudeTour how does checkout compute the total? opens Claude beside the code. Each time the user says next, Claude shows the next stop in the editor (checkout, the cart subtotal, discount codes, then sales tax), highlights it with a short note, and explains it.](.github/tour.gif)
 
@@ -11,8 +12,7 @@ opens files, highlights code with notes, and shows Git comparisons.
 - `:Claude` or `:Codex` to work through a task together.
 - `:ClaudeTour` or `:CodexTour` for a guided walkthrough, one stop at a time.
 
-Tandem never writes your buffers. There is nothing else to install: no server,
-Python, or Node package.
+There is nothing else to install: no server, Python, or Node package.
 
 ## Requirements
 
@@ -72,40 +72,55 @@ Start from the code you want to work on:
 - Hide the agent with `:q` and bring it back with the same command. To leave
   the agent's terminal, press `<C-\><C-n>`, then `<C-w>h` to reach your code.
 - Each code window has its own agent, so you can run several at once. If you
-  close an agent's code window, run the command again to give it a new one.
+  close an agent's window and its tab has no other file's window, run the
+  command again to give it a new one.
 - When the agent exits, its highlights disappear. After a clean exit, its pane
   closes too.
 
 ## What the agent can do
 
 - Read your buffers, including unsaved changes.
-- Open files in your code window and highlight lines with short notes.
+- Open files in its window and highlight lines with short notes.
 - Compare the current file with `HEAD` or any Git revision.
+- Run any Ex command, as if typed after `:`. It can split, open tabs, jump,
+  fold, search, or edit with `:normal`, just as you would.
 - Edit files with its usual tools. Tandem reloads buffers that have no unsaved
   changes, so you see the edits.
 
-It never writes, saves, or discards your buffers, and it won't move your code
-window while you're typing in it. Highlights and notes never change the file.
+The agent has its own window, which starts as the one you launched it from and
+moves with its commands, as your cursor moves with yours: after it opens a
+split, it works there. Your own window, cursor, and mode stay put, and so does
+the window `CTRL-W p` returns to. If you close the agent's window, it moves to
+another one in its tab. The agent's pane keeps its width when windows split.
+
+Tandem won't act in the agent's window while you're typing in it, and
+highlights and notes never change the file. The agent is told not to save,
+reload, or discard your unsaved changes unless you ask, and to close the splits
+and tabs it opens once they stop helping.
 
 ## Permissions
 
 The agent drives your editor by running a small helper, `tandem`, in its shell.
-Tandem keeps your agent's permission settings and adds only what the helper
-needs:
+Reading, opening files, highlighting, and comparing need no approval.
+`tandem ex` does: it can do anything your editor can, including run shell
+commands with `:!`, so it goes through your agent's usual approval. Approve it
+with "don't ask again" to let the agent drive freely.
 
-- **Claude Code:** Tandem passes `--settings` with an allow rule for
-  `Bash(tandem *)`, plus access to the editor's socket in case Claude's sandbox
-  is on. These add to your own settings, and your deny and ask rules still win.
+- **Claude Code:** Tandem passes `--settings` that allow the helper's other
+  commands and run the helper outside Claude's sandbox, where your permission
+  rules apply. These add to your own settings, and your deny and ask rules
+  still win. To approve `tandem ex` up front, allow `Bash(tandem ex *)`.
 - **Codex:** a session can't be granted the helper alone, so Tandem adds
   nothing. If Codex runs sandboxed, as it does by default, it asks to run its
   first `tandem` command outside the sandbox. Approve it with "don't ask again",
   or add this line to `~/.codex/rules/default.rules`:
 
   ```
-  prefix_rule(pattern=["tandem"], decision="allow")
+  prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")
   ```
 
-  The rule lets only commands that start with `tandem` run outside the sandbox.
+  The rule lets only those `tandem` commands run outside the sandbox. To also
+  approve `tandem ex` up front, add `"ex"` to the list.
 
 ## Configuration
 

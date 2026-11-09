@@ -14,7 +14,7 @@ import time
 import unittest
 import uuid
 
-from support import CLI, SKILL, VIM_STARTUP, clean_env, default_ask, fake_agent, git, instructions, launches, make_repo, wait_for
+from support import CLAUDE_SETTINGS, CLI, SKILL, VIM_STARTUP, clean_env, default_ask, fake_agent, git, instructions, launches, make_repo, wait_for
 
 MACVIM = os.environ.get("MACVIM_BINARY", "/Applications/MacVim.app/Contents/MacOS/Vim")
 TERMINAL_VIM = os.environ.get("VIM_TEST_BINARY") or shutil.which("vim")
@@ -132,6 +132,41 @@ class VimCases:
     def test_state_works_while_the_user_is_in_another_tab(self):
         self.commands("call win_execute(%d, 'lcd /usr')" % self.source, "tabnew")
         self.assertEqual(self.call("state")["result"]["cwd"], "/usr")
+
+    # ----------------------------------------------------------------- ex
+
+    def user(self):
+        return self.expr("[win_getid(), win_getid(winnr('#'))]")
+
+    def test_ex_runs_commands_in_the_code_window_and_follows_new_splits(self):
+        self.commands("call win_gotoid(%d)" % self.source, "call win_gotoid(%d)" % self.terminal)
+        self.assertEqual(self.user(), [self.terminal, self.source])
+        split = self.call("ex", "vsplit", "other.py")["result"]
+        self.assertNotIn(split["window"], (self.source, self.terminal))
+        self.assertEqual(Path(split["file"]).name, "other.py")
+        self.call("highlight", "--start", "2", "--note", "in the split")
+        other = self.expr("winbufnr(%d)" % split["window"])
+        self.assertEqual(self.notes(other), ["in the split"])
+        self.assertEqual(self.expr("winbufnr(%d)" % self.source), self.buffer)
+        below = self.call("ex", "split\nwincmd j\nnormal! G")["result"]
+        self.assertEqual((below["window"], below["cursor"]), (split["window"], [2, 1]))
+        self.assertIn("other.py", self.call("ex", "ls")["result"]["output"])
+        state = self.call("state")["result"]
+        self.assertEqual((state["target"], state["layout"][0]), (split["window"], "row"))
+        self.assertEqual(self.user(), [self.terminal, self.source])
+
+    def test_ex_reports_errors_and_stays_out_of_terminals(self):
+        self.assertIn("E492", self.call("ex", "nosuchcommand", success=False)["error"])
+        self.assertIn("requires a command", self.call("ex", success=False)["error"])
+        self.assertEqual(self.call("ex", "wincmd h")["result"]["window"], self.source)
+
+    def test_an_agent_whose_window_closes_moves_to_another(self):
+        self.commands("let g:tandem_claude_cmd = [%s]" % vim_string(str(self.agent())))
+        self.launch("Claude")
+        wait_for(lambda: launches(self.log))
+        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+        self.commands("call win_execute(%d, 'close')" % split)
+        self.assertEqual(self.call("state")["result"]["target"], self.source)
 
     def test_unreachable_editor_explains_sandbox_and_restart(self):
         # Vim's client exits 0 when it cannot connect.
@@ -356,7 +391,7 @@ class VimCases:
                             self.assertEqual((flag, system_flag, settings_flag, separator),
                                              ("--custom-flag", "--append-system-prompt", "--settings", "--"))
                             self.assertEqual(system, instructions(mode))
-                            self.assertEqual(json.loads(settings)["permissions"], {"allow": ["Bash(tandem *)"]})
+                            self.assertEqual(json.loads(settings), CLAUDE_SETTINGS)
                             self.assertEqual(prompt, ask)
                         else:
                             self.assertEqual(launched["argv"], ["--custom-flag", "Read and follow %s. Session mode: %s. %s"

@@ -16,14 +16,21 @@ CONTENTS                                                     *tandem-contents*
 1. INTRODUCTION                                 *tandem* *tandem-introduction*
 
 Tandem runs Claude Code or Codex in a terminal split beside a code window.
-The agent sees what you see: it reads your buffers, including unsaved
-changes, opens files in the code window, highlights lines with short notes,
-and shows Git comparisons.
+The agent shares the editor with you as an equal: it reads your buffers,
+including unsaved changes, opens files and splits, runs any Ex command,
+highlights lines with short notes, and shows Git comparisons.
 
-It never writes, saves, or discards your buffers, and it won't move the code
-window while you're typing in it. Highlights and notes never change the file.
-When the agent edits a file, Tandem reloads its buffer if it has no unsaved
-changes, so you see the edit.
+The agent has its own window, which starts as the code window you launched it
+from and moves with its commands, as your cursor moves with yours: after it
+opens a split, it works there. Your own window, cursor, and mode stay put, and
+so does the window CTRL-W p returns to. The agent's pane keeps its width when
+windows split.
+
+Tandem won't act in the agent's window while you're typing in it, and
+highlights and notes never change the file. The agent is told not to save,
+reload, or discard your unsaved changes unless you ask. When the agent edits a
+file, Tandem reloads its buffer if it has no unsaved changes, so you see the
+edit.
 
 Requirements:
 - Neovim 0.11+, or Vim or MacVim 9.1+ with `+clientserver`, `+terminal`, and
@@ -55,8 +62,9 @@ In Neovim, `:checkhealth tandem` checks your setup.
 
                         Each code window has its own agent. From an agent's
                         pane, the command works with that agent's window. If
-                        you close an agent's code window, the command gives
-                        the agent a new one.
+                        you close an agent's window, the agent moves to
+                        another file's window in its tab; if there is none,
+                        the command gives the agent a new one.
 
                                                     *:ClaudeTour* *:CodexTour*
 :[range]ClaudeTour[!] [topic]
@@ -114,22 +122,26 @@ link to Visual and Special unless your colorscheme sets them.
 4. PERMISSIONS                                            *tandem-permissions*
 
 The agent drives the editor by running the `tandem` helper in its shell.
-Tandem keeps your agent's permission settings and adds only what the helper
-needs.
+Reading, opening files, highlighting, and comparing need no approval.
+`tandem ex` does: it can do anything your editor can, including run shell
+commands with |:!|, so it goes through your agent's usual approval. Approve it
+with "don't ask again" to let the agent drive freely.
 
 Claude Code ~
-Tandem passes `--settings` with an allow rule for `Bash(tandem *)`, plus
-access to the editor's socket in case Claude's sandbox is on. These add to
-your own settings, and your deny and ask rules still win.
+Tandem passes `--settings` that allow the helper's other commands and run the
+helper outside Claude's sandbox, where your permission rules apply. These add
+to your own settings, and your deny and ask rules still win. To approve
+`tandem ex` up front, allow `Bash(tandem ex *)`.
 
 Codex ~
 A Codex session can't be granted the helper alone, so Tandem adds nothing. If
 Codex runs sandboxed, as it does by default, it asks to run its first `tandem`
 command outside the sandbox. Approve it with "don't ask again", or add this
 line to `~/.codex/rules/default.rules`: >
-    prefix_rule(pattern=["tandem"], decision="allow")
+    prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")
 <
-The rule lets only commands that start with `tandem` run outside the sandbox.
+The rule lets only those `tandem` commands run outside the sandbox. To also
+approve `tandem ex` up front, add `"ex"` to the list.
 
 ==============================================================================
 5. THE TANDEM HELPER                                           *tandem-helper*
@@ -143,6 +155,7 @@ calls the editor through its built-in remote client and prints JSON: >
     tandem highlight --start N [--end N] [--note TEXT]
     tandem diff [FILE] [--base REV]
     tandem clear
+    tandem ex COMMAND
 <
 To use it outside an agent pane, pass `--server` (from `:echo v:servername`)
 and `--window` (from `:echo win_getid()`), plus `--editor vim` for Vim or

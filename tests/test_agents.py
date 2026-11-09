@@ -21,6 +21,12 @@ REAL_AGENTS = os.environ.get("TANDEM_AGENT_E2E") == "1"
 # The leading dash checks that a prompt is never read as a command-line option.
 PROMPT = ("- Use the tandem command to highlight line 3 of the code window with the note "
           "'agent check'. Do not do anything else, then reply with the word done.")
+EX_PROMPT = ("Run `tandem ex vsplit other.py` to open other.py in a vertical split. Do not do anything else, "
+             "then reply with the word done.")
+# A command that drives the editor without the helper, as anything that can
+# reach its socket could.
+DIRECT_PROMPT = ("Run exactly this shell command once: nvim --server \"$TANDEM_SERVER\" --remote-expr "
+                 "'execute(\"vsplit other.py\")' . Do not do anything else, then reply with the word done.")
 
 
 def codex():
@@ -83,10 +89,18 @@ class Editor:
     def launch(self, command, prompt=""):
         """Runs a launch command with a stand-in agent and returns the argv and environment it got."""
         log = self.directory / "launches.jsonl"
+        log.unlink(missing_ok=True)
         agent = fake_agent(self.directory / "agent", log, lifetime=0)
         self.lua("vim.g.tandem_%s_cmd = {%s}; vim.api.nvim_set_current_win(%d); vim.cmd(%s); return true"
                  % (command.lower(), json.dumps(str(agent)), self.window, json.dumps(command + " " + prompt)))
-        return wait_for(lambda: launches(log))[0]
+        launched = wait_for(lambda: launches(log))[0]
+        self.launch_env = launched["env"]
+        return launched
+
+    def files(self):
+        """The files shown in the editor's windows."""
+        return self.lua("return vim.tbl_map(function(window) return vim.fs.basename(vim.api.nvim_buf_get_name("
+                        "vim.api.nvim_win_get_buf(window))) end, vim.api.nvim_list_wins())")
 
     def notes(self):
         marks = self.lua("return vim.api.nvim_buf_get_extmarks(%d,-1,0,-1,{details=true})" % self.buffer)
@@ -101,6 +115,10 @@ class CodexPermissionTest(unittest.TestCase):
             rules.write_text(documented_codex_rule() + "\n")
             for command, allowed in ((["tandem", "state"], True),
                                      (["tandem", "show", "a.py", "--start", "3", "--note", "x"], True),
+                                     (["tandem", "diff"], True),
+                                     (["tandem", "clear"], True),
+                                     # ex can run anything the editor can, so Codex asks first.
+                                     (["tandem", "ex", "vsplit", "a.py"], False),
                                      (["tandemx", "state"], False),
                                      (["rm", "-rf", "x"], False)):
                 with self.subTest(command=command):
@@ -124,15 +142,7 @@ class CodexPermissionTest(unittest.TestCase):
 @unittest.skipUnless(REAL_AGENTS, "Set TANDEM_AGENT_E2E=1 to run real agents")
 class RealAgentTest(unittest.TestCase):
     def test_claude_reaches_the_editor_with_default_permissions(self):
-        if not shutil.which("claude"):
-            self.skipTest("Claude Code is not installed")
-        model = os.environ.get("TANDEM_E2E_CLAUDE_MODEL", "haiku")
-        # Print mode cannot ask for approval. Skipping user settings makes this a
-        # new user's setup: no personal allow rules, hooks, or bypass mode. The runs
-        # stay out of your session history, though Claude still makes an empty
-        # folder for each run's directory in ~/.claude/projects.
-        claude = ["claude", "-p", "--setting-sources", "project,local", "--permission-mode", "default",
-                  "--no-session-persistence", "--model", model, "--max-turns", "6"]
+        claude = self.claude()
         # Without Tandem's --settings the same request must fail, or this test proves nothing.
         for allowed in (True, False):
             with self.subTest(tandem_settings=allowed):
@@ -146,6 +156,65 @@ class RealAgentTest(unittest.TestCase):
                                         text=True, capture_output=True, timeout=300)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertEqual((3, "agent check") in editor.notes(), allowed, result.stdout)
+
+    def claude(self):
+        """The Claude command line for a test run."""
+        if not shutil.which("claude"):
+            self.skipTest("Claude Code is not installed")
+        model = os.environ.get("TANDEM_E2E_CLAUDE_MODEL", "haiku")
+        # Print mode cannot ask for approval. Skipping user settings makes this a
+        # new user's setup: no personal allow rules, hooks, or bypass mode. The runs
+        # stay out of your session history, though Claude still makes empty
+        # folders for each run's directory in ~/.claude/projects.
+        return ["claude", "-p", "--setting-sources", "project,local", "--permission-mode", "default",
+                "--no-session-persistence", "--model", model, "--max-turns", "6"]
+
+    def run_claude(self, editor, prompt, edit_settings, extra=()):
+        """Runs Claude as :Claude would, with its session settings changed by edit_settings."""
+        argv = list(editor.launch("Claude", prompt)["argv"])
+        position = argv.index("--settings") + 1
+        settings = json.loads(argv[position])
+        edit_settings(settings)
+        argv[position] = json.dumps(settings)
+        result = subprocess.run(self.claude() + list(extra) + argv, env=editor.launch_env, cwd=editor.directory,
+                                text=True, capture_output=True, timeout=300)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        return result
+
+    def test_claude_asks_before_ex_commands_unless_you_allow_them(self):
+        for sandboxed in (False, True):
+            for allowed in (False, True):
+                with self.subTest(sandboxed=sandboxed, user_allows_ex=allowed):
+                    editor = Editor(self)
+                    sandbox = (lambda settings: settings["sandbox"].update(enabled=True)) if sandboxed else (lambda _: None)
+                    # Print mode can't ask, so a command that needs approval is refused.
+                    result = self.run_claude(editor, EX_PROMPT, sandbox,
+                                             ["--allowedTools", "Bash(tandem ex *)"] if allowed else [])
+                    self.assertEqual("other.py" in editor.files(), allowed, result.stdout)
+
+    def test_claude_opens_a_split_when_asked(self):
+        # What the user said, not which command to run: the instructions must
+        # tell Claude that it can.
+        editor = Editor(self)
+        result = self.run_claude(editor, "Open other.py in a vertical split next to my code, then reply done.",
+                                 lambda _: None, ["--allowedTools", "Bash(tandem ex *)"])
+        self.assertIn("other.py", editor.files(), result.stdout)
+        self.assertIn(editor.file.name, editor.files(), result.stdout)
+
+    def test_claudes_sandbox_does_not_reach_the_editor(self):
+        # Sandboxed commands are approved automatically, so the sandbox must not
+        # reach the editor's socket, or any command could drive the editor. The
+        # same command must work when the socket is open, or this test proves nothing.
+        for socket_open in (False, True):
+            with self.subTest(socket_open=socket_open):
+                editor = Editor(self)
+
+                def sandbox(settings):
+                    settings["sandbox"]["enabled"] = True
+                    if socket_open:
+                        settings["sandbox"]["network"] = {"allowUnixSockets": [editor.launch_env["TANDEM_SERVER"]]}
+                result = self.run_claude(editor, DIRECT_PROMPT, sandbox)
+                self.assertEqual("other.py" in editor.files(), socket_open, result.stdout)
 
     def test_codex_reaches_the_editor_from_its_sandbox_with_the_documented_rule(self):
         if not codex():

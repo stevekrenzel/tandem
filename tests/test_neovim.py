@@ -12,7 +12,7 @@ import tempfile
 import time
 import unittest
 
-from support import (CLI, NEOVIM_STARTUP, ROOT, SKILL, Screen, clean_env, default_ask, fake_agent, git,
+from support import (CLAUDE_SETTINGS, CLI, NEOVIM_STARTUP, ROOT, SKILL, Screen, clean_env, default_ask, fake_agent, git,
                      instructions, launches, make_repo, wait_for)
 
 
@@ -333,10 +333,16 @@ class NeovimTest(unittest.TestCase):
         logged = lambda: sizes.read_text().splitlines() if sizes.exists() else []
         wait_for(lambda: logged() and logged()[-1] == size)
         self.assertEqual(self.lua("return vim.fn.mode()"), "t")
+        previous = self.lua("return vim.fn.win_getid(vim.fn.winnr('#'))")
         self.call("show", str(self.other), "--start", "1")
         self.call("diff", str(self.file))
+        self.call("clear")
+        # Commands that load hidden buffers, split, and switch windows.
+        self.call("ex", "edit", str(self.other))
+        self.call("ex", "split\nwincmd j\nwincmd k\nclose")
         time.sleep(1)  # a resize reaches the agent asynchronously
         self.assertEqual(logged()[-1], size, logged())
+        self.assertEqual(self.lua("return {vim.fn.mode(), vim.fn.win_getid(vim.fn.winnr('#'))}"), ["t", previous])
 
     def test_navigation_waits_while_the_user_types_in_the_code_window(self):
         self.lua("vim.api.nvim_set_current_win(%d); return true" % self.source)
@@ -345,7 +351,7 @@ class NeovimTest(unittest.TestCase):
             with self.subTest(keys=keys):
                 subprocess.run(["nvim", "--server", self.socket, "--remote-send", keys], env=self.env, check=True)
                 wait_for(lambda: self.lua("return vim.fn.mode(1)") != "n")
-                for command in (("show", "other.py"), ("highlight", "--start", "2"), ("diff",)):
+                for command in (("show", "other.py"), ("highlight", "--start", "2"), ("diff",), ("ex", "vsplit")):
                     self.assertIn("typing", self.call(*command, success=False)["error"])
                 self.assertEqual(self.call("read", "--end", "1")["result"]["lines"], ["line 1"])
                 subprocess.run(["nvim", "--server", self.socket, "--remote-send", "<Esc>"], env=self.env, check=True)
@@ -420,7 +426,70 @@ class NeovimTest(unittest.TestCase):
         wait_for(lambda: self.marks() == [], message="annotations stayed after the window closed")
         self.assertIn("closed", self.call("state", success=False)["error"])
 
-    # --------------------------------------------------------------- diff
+    # ----------------------------------------------------------------- ex
+
+    def user(self):
+        return self.lua("return {window=vim.api.nvim_get_current_win(), previous=vim.fn.win_getid(vim.fn.winnr('#')),"
+                        " mode=vim.fn.mode()}")
+
+    def test_ex_runs_commands_in_the_code_window_and_follows_new_splits(self):
+        self.lua("vim.api.nvim_set_current_win(%d); vim.api.nvim_set_current_win(%d); vim.cmd.startinsert(); return true"
+                 % (self.source, self.terminal))
+        before = self.user()
+        self.assertEqual(before, {"window": self.terminal, "previous": self.source, "mode": "t"})
+
+        split = self.call("ex", "vsplit", "other.py")["result"]
+        self.assertNotIn(split["window"], (self.source, self.terminal))
+        self.assertEqual((Path(split["file"]).name, split["output"]), ("other.py", ""))
+        self.call("highlight", "--start", "2", "--note", "in the split")
+        other = self.lua("return vim.api.nvim_win_get_buf(%d)" % split["window"])
+        self.assertEqual([(m[1], m[3]["virt_lines"][0][0][0]) for m in self.marks(other) if "virt_lines" in m[3]],
+                         [(1, "  in the split")])
+        self.assertEqual(self.lua("return vim.api.nvim_win_get_buf(%d)" % self.source), self.buffer)
+
+        # Each line is a command; the agent's window ends where the commands do.
+        below = self.call("ex", "split\nwincmd j\nnormal! G")["result"]
+        self.assertEqual((below["window"], below["cursor"]), (split["window"], [2, 1]))
+        self.assertIn("other.py", self.call("ex", "ls")["result"]["output"])
+        self.call("ex", "normal!", "ggdd")
+        self.assertEqual(self.lua("return vim.api.nvim_buf_get_lines(%d, 0, -1, false)" % other), ["second line"])
+
+        state = self.call("state")["result"]
+        self.assertEqual(state["target"], split["window"])
+        self.assertEqual(state["layout"][0], "row")
+        files = {window["id"]: Path(window["file"]).name for window in state["windows"]}
+        self.assertEqual(files[split["window"]], "other.py")
+        self.assertEqual(files[self.source], self.file.name)
+        # The user is still typing to the agent, and CTRL-W p still goes where it did.
+        self.assertEqual(self.user(), before)
+
+    def test_ex_reports_errors_and_stays_out_of_terminals_and_other_agents_windows(self):
+        self.assertIn("E492", self.call("ex", "nosuchcommand", success=False)["error"])
+        self.assertIn("requires a command", self.call("ex", success=False)["error"])
+        # The setup's terminal sits left of the code window.
+        self.assertEqual(self.call("ex", "wincmd h")["result"]["window"], self.source)
+        second = self.lua("return vim.api.nvim_open_win(%d, false, {split='below', win=%d})" % (self.buffer, self.source))
+        self.call("--window", str(second), "highlight", "--start", "1")
+        self.assertEqual(self.call("ex", "call win_gotoid(%d)" % second)["result"]["window"], self.source)
+        # A help window can be worked in with ex, but not shown files in.
+        help_window = self.call("ex", "help win_execute")["result"]["window"]
+        self.assertEqual(self.lua("return vim.bo[vim.api.nvim_win_get_buf(%d)].buftype" % help_window), "help")
+        self.assertIn("tandem ex", self.call("show", "other.py", success=False)["error"])
+        self.assertEqual(self.call("state")["result"]["target"], help_window)
+        self.assertNotEqual(self.call("ex", "close")["result"]["window"], help_window)
+        self.call("show", "other.py")
+
+    def test_an_agent_whose_window_closes_moves_to_another(self):
+        self.configure(claude_cmd=[str(self.agent())])
+        self.launch("Claude")
+        wait_for(lambda: launches(self.log))
+        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+        self.call("highlight", "--start", "1", "--note", "gone with the split")
+        other = self.lua("return vim.api.nvim_win_get_buf(%d)" % split)
+        self.lua("vim.api.nvim_win_close(%d, true); return true" % split)
+        self.assertEqual(self.call("state")["result"]["target"], self.source)
+        self.assertEqual(self.marks(other), [])
+
 
     def test_git_comparison_does_not_use_the_configured_shell(self):
         self.lua("vim.o.shell='/usr/bin/false'; return true")
@@ -582,9 +651,7 @@ class NeovimTest(unittest.TestCase):
                             self.assertEqual((flag, system_flag, settings_flag, separator),
                                              ("--claude-flag", "--append-system-prompt", "--settings", "--"))
                             self.assertEqual(system, instructions(mode))
-                            self.assertEqual(json.loads(settings), {
-                                "permissions": {"allow": ["Bash(tandem *)"]},
-                                "sandbox": {"network": {"allowUnixSockets": [self.socket]}}})
+                            self.assertEqual(json.loads(settings), CLAUDE_SETTINGS)
                             self.assertEqual(prompt, ask)
                         else:
                             self.assertEqual(launched["argv"], ["--codex-flag", "Read and follow %s. Session mode: %s. %s"
@@ -787,6 +854,31 @@ class NeovimTest(unittest.TestCase):
                 self.assertIn("Neovim", text)
                 self.assertNotIn("Failed to run healthcheck", text)
                 self.assertEqual(codex is None, "g:tandem_codex_cmd must be" not in text, text)
+
+    @unittest.skipUnless(shutil.which("codex"), "Codex is not installed")
+    def test_health_check_asks_codex_which_tandem_commands_your_rules_allow(self):
+        home = self.directory / "codex home"
+        (home / "rules").mkdir(parents=True)
+        self.lua("vim.g.tandem_codex_cmd = {%s}; vim.env.CODEX_HOME = %s; return true"
+                 % (json.dumps(shutil.which("codex")), json.dumps(str(home))))
+        documented = re.search(r'^\s*(prefix_rule\(.*"tandem".*\))\s*$', (ROOT / "README.md").read_text(), re.M).group(1)
+        for rule, advice, warning in (("", "add this line", False), (documented, "may run the tandem helper", False),
+                                      ('prefix_rule(pattern=["tandem"], decision="allow")', "may run the tandem helper",
+                                       True)):
+            with self.subTest(rule=rule):
+                (home / "rules/default.rules").write_text(rule + "\n")
+                self.lua("""
+                    for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+                      if vim.bo[buffer].filetype == 'checkhealth' then vim.api.nvim_buf_delete(buffer, {force=true}) end
+                    end
+                    vim.cmd('checkhealth tandem')
+                    return true
+                """)
+                text = "\n".join(wait_for(lambda: self.lua(
+                    "return vim.bo.filetype == 'checkhealth' and vim.api.nvim_buf_get_lines(0, 0, -1, false) or vim.NIL"),
+                    timeout=30))
+                self.assertIn(advice, text)
+                self.assertEqual("`tandem ex` run without asking" in text, warning, text)
 
 
 if __name__ == "__main__":

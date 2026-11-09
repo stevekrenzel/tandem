@@ -16,6 +16,16 @@ CLI = ROOT / "skills/tandem/scripts/tandem"
 SKILL = ROOT / "skills/tandem/SKILL.md"
 
 
+# The session settings Tandem gives Claude: the helper's display commands run
+# without asking, and the helper runs outside Claude's sandbox. tandem ex is
+# left to the user's own approval.
+CLAUDE_SETTINGS = {
+    "permissions": {"allow": ["Bash(tandem %s *)" % command
+                              for command in ("state", "read", "show", "highlight", "diff", "clear")]},
+    "sandbox": {"excludedCommands": ["tandem *"]},
+}
+
+
 def clean_env(**extra):
     """The test runner's environment without any outer editor or Tandem session."""
     env = {key: value for key, value in os.environ.items()

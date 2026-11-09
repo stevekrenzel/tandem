@@ -13,16 +13,29 @@ local function command(agent)
   return value
 end
 
-local function codex_allows_helper()
+local codex_rule = 'prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")'
+
+-- Whether the user's Codex rules let a command run outside the sandbox without
+-- asking. Asks Codex itself, so any form of rule counts. nil if Codex can't say.
+local function codex_allows(codex, words)
   local home = vim.env.CODEX_HOME or vim.fs.joinpath(vim.env.HOME, ".codex")
+  local argv = { codex, "execpolicy", "check" }
   for _, file in ipairs(vim.fn.glob(vim.fs.joinpath(home, "rules", "*.rules"), true, true)) do
-    for _, line in ipairs(vim.fn.readfile(file)) do
-      if line:match('^%s*prefix_rule%(pattern%s*=%s*%[%s*"tandem"%s*%]') and line:match('decision%s*=%s*"allow"') then
-        return true
-      end
-    end
+    vim.list_extend(argv, { "--rules", file })
   end
-  return false
+  if #argv == 3 then
+    return false
+  end
+  vim.list_extend(argv, { "--" })
+  vim.list_extend(argv, words)
+  local ok, result = pcall(function()
+    return vim.system(argv, { text = true }):wait(10000)
+  end)
+  if not ok or result.code ~= 0 then
+    return nil
+  end
+  local decoded, answer = pcall(vim.json.decode, result.stdout)
+  return decoded and type(answer) == "table" and answer.decision == "allow"
 end
 
 function M.check()
@@ -57,12 +70,23 @@ function M.check()
   end
 
   if found.codex_cmd then
-    if codex_allows_helper() then
+    local codex = command(agents[2])[1]
+    local display = codex_allows(codex, { "tandem", "show", "file" })
+    local ex = codex_allows(codex, { "tandem", "ex", "vsplit" })
+    if display == nil then
+      vim.health.info("Could not check your Codex rules with `codex execpolicy`")
+    elseif display then
       vim.health.ok("Codex may run the tandem helper outside its sandbox")
     else
       vim.health.info(
         "If Codex runs sandboxed, approve its first `tandem` command with \"don't ask again\", or add this line to ~/.codex/rules/default.rules:\n"
-          .. 'prefix_rule(pattern=["tandem"], decision="allow")'
+          .. codex_rule
+      )
+    end
+    if ex then
+      vim.health.warn(
+        "Your Codex rules let `tandem ex` run without asking. It can run any editor command, including shell commands.",
+        "To have Codex ask first, allow only the other tandem commands:\n" .. codex_rule
       )
     end
   end
