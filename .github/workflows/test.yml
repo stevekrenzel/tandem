@@ -19,10 +19,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1.6.1
-        with:
-          neovim: true
-          version: ${{ matrix.version }}
+      - name: Install Neovim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          build=nvim-$(uname -s | sed 's/Linux/linux/; s/Darwin/macos/')-$(uname -m | sed 's/aarch64/arm64/')
+          gh release download "$VERSION" -R neovim/neovim -p "$build.tar.gz" -O - | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$build/bin" >> "$GITHUB_PATH"
+      - run: nvim --version
       - run: python3 -m unittest discover -s tests -p test_neovim.py -v
 
   vim:
