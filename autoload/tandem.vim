@@ -572,16 +572,26 @@ function! s:Run(args) abort
   endif
   if action ==# 'state'
     return s:State(window)
-  elseif action ==# 'read'
-    return s:Read(window, a:args.file, a:args.start, a:args.end)
-  elseif action ==# 'show'
-    return s:Show(window, a:args.file, a:args.start, a:args.end, a:args.note)
-  elseif action ==# 'highlight'
-    return s:Annotate(window, a:args.start, a:args.end, a:args.note)
-  elseif action ==# 'diff'
-    return s:Diff(window, a:args.file, a:args.base)
   endif
-  return s:Clear(window)
+  " Loading a hidden buffer, as bufload() and setbufvar() do, from a focused
+  " Neovim terminal resizes that terminal to the whole screen. Act from the
+  " code window instead.
+  let result = v:null
+  call win_execute(window, 'let result = ' . s:sid . 'Act(window, a:args)')
+  return result
+endfunction
+
+function! s:Act(window, args) abort
+  if a:args.action ==# 'read'
+    return s:Read(a:window, a:args.file, a:args.start, a:args.end)
+  elseif a:args.action ==# 'show'
+    return s:Show(a:window, a:args.file, a:args.start, a:args.end, a:args.note)
+  elseif a:args.action ==# 'highlight'
+    return s:Annotate(a:window, a:args.start, a:args.end, a:args.note)
+  elseif a:args.action ==# 'diff'
+    return s:Diff(a:window, a:args.file, a:args.base)
+  endif
+  return s:Clear(a:window)
 endfunction
 
 " Returns a session's code window. Without a session, the key is a window ID.

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -310,6 +311,32 @@ class NeovimTest(unittest.TestCase):
         first = next(i for i, row in enumerate(rows) if re.search(r"line 1(?!\d)", row))
         self.assertIsNotNone(note, "\n".join(rows))
         self.assertEqual(note, first - 1)
+
+    def test_the_agent_keeps_its_terminal_size_while_it_drives_the_editor(self):
+        # From a focused terminal, Neovim resizes that terminal to the whole
+        # screen whenever a hidden buffer is briefly loaded, as opening a file
+        # or a comparison does.
+        screen = Screen(self.socket)
+        self.addCleanup(screen.close)
+        wait_for(lambda: self.lua("return #vim.api.nvim_list_uis()") == 1)
+        sizes = self.directory / "sizes"
+        record = "stty size >> %s" % shlex.quote(str(sizes))
+        pane = self.lua("""
+            vim.api.nvim_set_current_win(%d)
+            vim.cmd.enew()
+            vim.fn.jobstart({'sh', '-c', %s}, {term=true})
+            vim.cmd.startinsert()
+            return vim.api.nvim_get_current_win()
+        """ % (self.terminal, json.dumps("trap '%s' WINCH; %s; while :; do sleep 0.05; done" % (record, record))))
+        size = "%d %d" % tuple(self.lua("return {vim.api.nvim_win_get_height(%d), vim.api.nvim_win_get_width(%d)}"
+                                        % (pane, pane)))
+        logged = lambda: sizes.read_text().splitlines() if sizes.exists() else []
+        wait_for(lambda: logged() and logged()[-1] == size)
+        self.assertEqual(self.lua("return vim.fn.mode()"), "t")
+        self.call("show", str(self.other), "--start", "1")
+        self.call("diff", str(self.file))
+        time.sleep(1)  # a resize reaches the agent asynchronously
+        self.assertEqual(logged()[-1], size, logged())
 
     def test_navigation_waits_while_the_user_types_in_the_code_window(self):
         self.lua("vim.api.nvim_set_current_win(%d); return true" % self.source)
