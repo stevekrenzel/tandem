@@ -752,7 +752,10 @@ class NeovimTest(unittest.TestCase):
             with self.subTest(codex_cmd=codex):
                 value = "nil" if codex is None else "vim.json.decode(%s)" % json.dumps(json.dumps(codex))
                 self.lua("vim.g.tandem_codex_cmd = %s; return true" % value)
-                lines = self.lua("vim.cmd('checkhealth tandem'); return vim.api.nvim_buf_get_lines(0, 0, -1, false)")
+                self.lua("vim.cmd('checkhealth tandem'); return true")
+                # Newer Neovims check health asynchronously and set the filetype once done.
+                lines = wait_for(lambda: self.lua(
+                    "return vim.bo.filetype == 'checkhealth' and vim.api.nvim_buf_get_lines(0, 0, -1, false) or vim.NIL"))
                 text = "\n".join(lines)
                 self.assertIn("Neovim", text)
                 self.assertNotIn("Failed to run healthcheck", text)
