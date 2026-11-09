@@ -4,6 +4,10 @@ Work with Claude Code or Codex inside Neovim, Vim, or MacVim. The agent runs in
 a split beside your code and sees what you see: it reads your unsaved buffers,
 opens files, highlights code with notes, and shows Git comparisons.
 
+![:ClaudeTour how does checkout compute the total? opens Claude beside the code. Each time the user says next, Claude shows the next stop in the editor (checkout, the cart subtotal, discount codes, then sales tax), highlights it with a short note, and explains it.](.github/tour.gif)
+
+![After an unsaved edit, :Claude what did I just break? opens Claude beside the code. Claude compares the buffer with Git, highlights the changed line with a note, and explains which test now fails.](.github/break.gif)
+
 - `:Claude` or `:Codex` to work through a task together.
 - `:ClaudeTour` or `:CodexTour` for a guided walkthrough, one stop at a time.
 
