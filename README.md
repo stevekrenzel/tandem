@@ -4,6 +4,8 @@ Work with Claude Code or Codex inside Neovim, Vim, or MacVim. The agent runs in
 a split beside your code and sees what you see: it reads your unsaved buffers,
 opens files, highlights code with notes, and shows Git comparisons.
 
+![After an unsaved edit, :Claude what did I just break? opens Claude beside the code. Claude compares the buffer with Git, highlights the changed line with a note, and explains which test now fails.](.github/demo.gif)
+
 - `:Claude` or `:Codex` to work through a task together.
 - `:ClaudeTour` or `:CodexTour` for a guided walkthrough, one stop at a time.
 
