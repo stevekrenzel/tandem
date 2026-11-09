@@ -1,0 +1,170 @@
+*tandem.txt*  Work with Claude Code or Codex beside your code
+
+License: MIT
+
+==============================================================================
+CONTENTS                                                     *tandem-contents*
+
+  1. Introduction                 |tandem-introduction|
+  2. Commands                     |tandem-commands|
+  3. Options                      |tandem-options|
+  4. Permissions                  |tandem-permissions|
+  5. The tandem helper            |tandem-helper|
+  6. Troubleshooting              |tandem-troubleshooting|
+
+==============================================================================
+1. INTRODUCTION                                 *tandem* *tandem-introduction*
+
+Tandem runs Claude Code or Codex in a terminal split beside a code window.
+The agent sees what you see: it reads your buffers, including unsaved
+changes, opens files in the code window, highlights lines with short notes,
+and shows Git comparisons.
+
+It never writes, saves, or discards your buffers, and it won't move the code
+window while you're typing in it. Highlights and notes never change the file.
+When the agent edits a file, Tandem reloads its buffer if it has no unsaved
+changes, so you see the edit.
+
+Requirements:
+- Neovim 0.11+, or Vim or MacVim 9.1+ with `+clientserver`, `+terminal`, and
+  `+textprop`. Terminal Vim also needs a remote transport, such as Vim 9.2's
+  `+socketserver`.
+- Claude Code or the Codex CLI, signed in.
+- Bash and Git, on macOS or Linux.
+
+In Neovim, `:checkhealth tandem` checks your setup.
+
+==============================================================================
+2. COMMANDS                                                  *tandem-commands*
+
+                                                            *:Claude* *:Codex*
+:[range]Claude[!] [prompt]
+:[range]Codex[!] [prompt]
+                        Start Claude Code or Codex beside the current code
+                        window and send it [prompt]. Without a prompt, the
+                        agent looks at the code window and asks what you want.
+
+                        With a [range], such as a Visual selection, the agent
+                        is told which lines you mean: >
+                            :'<,'>Claude Why does this loop allocate?
+<
+                        If an agent is already working with the window, the
+                        command returns to its pane and types [prompt] into
+                        its input, ready to send. With [!], it starts over
+                        with a fresh agent.
+
+                        Each code window has its own agent. From an agent's
+                        pane, the command works with that agent's window. If
+                        you close an agent's code window, the command gives
+                        the agent a new one.
+
+                                                    *:ClaudeTour* *:CodexTour*
+:[range]ClaudeTour[!] [topic]
+:[range]CodexTour[!] [topic]
+                        Like |:Claude| and |:Codex|, but the agent gives a
+                        guided walkthrough, one stop at a time. Say "next" or
+                        ask a question at each stop.
+
+                                                                *:TandemClear*
+:TandemClear            Remove all highlights and comparison panes.
+
+The agent runs in a |terminal| window. To leave it, press CTRL-\ CTRL-N, then
+CTRL-W h. Hide it with |:quit| and bring it back with the same command that
+started it.
+
+When the agent exits, its highlights disappear. After a clean exit its pane
+closes; after an error the pane stays open so you can read what went wrong.
+
+==============================================================================
+3. OPTIONS                                                    *tandem-options*
+
+Tandem works without configuration.
+
+                                                         *g:tandem_claude_cmd*
+g:tandem_claude_cmd     List or String (default: ['claude'])
+                        Command that starts Claude Code: >
+                    let g:tandem_claude_cmd = ['claude', '--model', 'opus']
+<
+                        Use a list if an argument contains spaces. Tandem
+                        appends its own arguments and the prompt, so a wrapper
+                        script must pass its arguments on to the agent.
+
+                                                          *g:tandem_codex_cmd*
+g:tandem_codex_cmd      List or String (default: ['codex', '--no-daemon'])
+                        Command that starts Codex. `--no-daemon` runs Codex's
+                        commands in this session, where they can reach the
+                        editor. If your Codex rejects it, update Codex or set
+                        this to ['codex'].
+
+                                                              *g:tandem_width*
+g:tandem_width          Number or Float (default: 0.42)
+                        Width of the agent pane, as a fraction of the screen
+                        or a number of columns.
+
+                                                              *tandem.setup()*
+In Neovim, Lua can set the same options without the `tandem_` prefix,
+including as lazy.nvim's `opts`: >
+    require("tandem").setup({ claude_cmd = { "claude", "--model", "opus" } })
+<
+                                                    *TandemRange* *TandemNote*
+Highlighted lines use the TandemRange group and notes use TandemNote. They
+link to Visual and Special unless your colorscheme sets them.
+
+==============================================================================
+4. PERMISSIONS                                            *tandem-permissions*
+
+The agent drives the editor by running the `tandem` helper in its shell.
+Tandem keeps your agent's permission settings and adds only what the helper
+needs.
+
+Claude Code ~
+Tandem passes `--settings` with an allow rule for `Bash(tandem *)`, plus
+access to the editor's socket in case Claude's sandbox is on. These add to
+your own settings, and your deny and ask rules still win.
+
+Codex ~
+A Codex session can't be granted the helper alone, so Tandem adds nothing. If
+Codex runs sandboxed, as it does by default, it asks to run its first `tandem`
+command outside the sandbox. Approve it with "don't ask again", or add this
+line to `~/.codex/rules/default.rules`: >
+    prefix_rule(pattern=["tandem"], decision="allow")
+<
+The rule lets only commands that start with `tandem` run outside the sandbox.
+
+==============================================================================
+5. THE TANDEM HELPER                                           *tandem-helper*
+
+The agent's pane has the helper from `skills/tandem/scripts` on its PATH, and
+the agent follows the instructions in `skills/tandem/SKILL.md`. The helper
+calls the editor through its built-in remote client and prints JSON: >
+    tandem state
+    tandem read [FILE] [--start N] [--end N]
+    tandem show FILE [--start N] [--end N] [--note TEXT]
+    tandem highlight --start N [--end N] [--note TEXT]
+    tandem diff [FILE] [--base REV]
+    tandem clear
+<
+To use it outside an agent pane, pass `--server` (from `:echo v:servername`)
+and `--window` (from `:echo win_getid()`), plus `--editor vim` for Vim or
+`--editor macvim` for MacVim. `TANDEM_TIMEOUT` sets how many seconds it waits
+for the editor; the default is 10.
+
+==============================================================================
+6. TROUBLESHOOTING                                    *tandem-troubleshooting*
+
+The executable was not found.
+    Install the agent and sign in, or set |g:tandem_claude_cmd| or
+    |g:tandem_codex_cmd| to its full path. A MacVim started from the Dock may
+    not see your shell's PATH.
+
+The agent can't reach the editor.
+    For Codex, allow the helper as described in |tandem-permissions|.
+    Otherwise run `:Claude!` or `:Codex!` from a code window. MacVim's server
+    needs its GUI; terminal Vim needs a remote transport such as
+    `+socketserver`.
+
+This tab already has a diff open.
+    Close that comparison or use another tab. Vim and Neovim share one diff
+    per tab.
+
+ vim:tw=78:ts=8:ft=help:norl:

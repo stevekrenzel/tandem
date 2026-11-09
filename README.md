@@ -1,234 +1,185 @@
 # Tandem
 
-Run Codex or Claude Code beside your code in a Neovim, Vim, or MacVim terminal
-split. Work together on coding tasks, or start a guided walkthrough. Both agents
-can inspect live buffers, open files, highlight code, and show Git comparisons.
+Work with Claude Code or Codex inside Neovim, Vim, or MacVim. The agent runs in
+a split beside your code and sees what you see: it reads your unsaved buffers,
+opens files, highlights code with notes, and shows Git comparisons.
 
-The plugin uses the editor's built-in remote client and loads the bundled
-instructions when you start either agent. No extra server, global skill installation,
-Python, Node package, or build step is needed for this plugin.
+- `:Claude` or `:Codex` to work through a task together.
+- `:ClaudeTour` or `:CodexTour` for a guided walkthrough, one stop at a time.
+
+Tandem never writes your buffers. There is nothing else to install: no server,
+Python, or Node package.
+
+## Requirements
+
+- Neovim 0.11+, or Vim or MacVim 9.1+ with `+clientserver`, `+terminal`, and
+  `+textprop`. Terminal Vim also needs a remote transport, such as Vim 9.2's
+  `+socketserver`.
+- [Claude Code](https://code.claude.com/docs/en/cli-reference) or the
+  [Codex CLI](https://learn.chatgpt.com/docs/cli/reference), signed in.
+- Bash and Git, on macOS or Linux.
 
 ## Install
 
-You need Bash, either [Codex CLI](https://learn.chatgpt.com/docs/cli/reference)
-(with `--no-daemon` support) or [Claude Code](https://code.claude.com/docs/en/cli-reference)
-on PATH, and either:
-
-- Neovim 0.11+ on macOS or Linux.
-- MacVim/Vim 9.1+ with `+clientserver`, `+terminal`, and `+textprop`. Terminal Vim
-  also needs a working remote transport, such as Vim 9.2's `+socketserver`.
-
-Git is needed for comparisons. Authenticate with your chosen agent before
-starting a session. You only need the CLI you plan to use.
-
-### Plugin manager
-
-Use your usual plugin manager; there are no install hooks or required setup calls.
-These examples use this local checkout. Once you publish the repository, replace
-its local path with `YOUR_GITHUB_USER/tandem`.
-
-[lazy.nvim](https://lazy.folke.io/spec) (Neovim):
+[lazy.nvim](https://lazy.folke.io):
 
 ```lua
-{
-  dir = vim.fn.expand("~/Projects/tandem"),
-  cmd = { "Codex", "CodexTour", "Claude", "ClaudeTour", "TandemClear" },
-  -- Optional: opts = { width = 0.42 },
-}
+{ "stevekrenzel/tandem" }
 ```
 
-For a published repository, replace `dir = ...` with `"YOUR_GITHUB_USER/tandem"`.
-
-[vim-plug](https://github.com/junegunn/vim-plug) (Vim, MacVim, or Neovim), inside
-`plug#begin()` / `plug#end()`:
+[vim-plug](https://github.com/junegunn/vim-plug):
 
 ```vim
-Plug '~/Projects/tandem'
+Plug 'stevekrenzel/tandem'
 ```
 
-[packer.nvim](https://github.com/wbthomason/packer.nvim) (Neovim), inside its startup function:
-
-```lua
-use { vim.fn.expand("~/Projects/tandem") }
-```
-
-The standard `plugin/`, `autoload/`, and `lua/` layout also works with native
-packages and other managers that add plugins to `runtimepath`.
-
-### Without a plugin manager
-
-From this checkout:
+Native packages:
 
 ```sh
-./install.sh                 # Neovim
-./install.sh --editor vim    # Vim or MacVim (--editor macvim also works)
-./install.sh --editor both   # Both
+git clone https://github.com/stevekrenzel/tandem ~/.local/share/nvim/site/pack/tandem/start/tandem  # Neovim
+git clone https://github.com/stevekrenzel/tandem ~/.vim/pack/tandem/start/tandem                    # Vim
 ```
 
-The script creates one package symlink per editor:
+Then run `:helptags ALL` for `:help tandem`. In Neovim, `:checkhealth tandem`
+checks your setup. There's no need to lazy-load: Tandem defines its commands at
+startup and loads everything else on first use.
 
-| Editor | Default package location |
-| --- | --- |
-| Neovim | `~/.local/share/nvim/site/pack/tandem/start/tandem` |
-| Vim / MacVim | `~/.vim/pack/tandem/start/tandem` |
+## Usage
 
-It checks all destinations before making changes and never replaces existing
-files. Re-running it is safe. Neovim paths honor `XDG_DATA_HOME` and `NVIM_APPNAME`;
-use `--nvim-data-dir DIR` or `--vim-dir DIR` for custom locations. Keep this
-checkout in place while installed. No editor or agent configuration is changed.
-
-## Work with an agent
-
-Start from a code window:
-
-| Command | Session |
-| --- | --- |
-| `:Codex [prompt]` | Codex coding partner |
-| `:Claude [prompt]` | Claude Code coding partner |
-| `:CodexTour [topic]` | Guided walkthrough with Codex |
-| `:ClaudeTour [topic]` | Guided walkthrough with Claude Code |
-
-For example:
+Start from the code you want to work on:
 
 ```vim
-:Codex Help me fix this failing test
-:Claude Explain this function and suggest a simpler implementation
-:CodexTour Walk me through this branch's changes
-:ClaudeTour Show how authentication works, one stop at a time
+:Claude Help me fix this failing test
+:Codex Explain this function and suggest a simpler version
+:ClaudeTour Walk me through this branch's changes
+:'<,'>Claude Why does this loop allocate?
 ```
 
-All four commands open a terminal on the right, connected to the original code
-window. Without a prompt, the agent inspects the editor and asks what you want
-to work on. Partner sessions work at the task's natural pace; tour sessions pause
-between stops so you can say “next” or ask questions. You can change modes in chat.
+| Command | What it does |
+| --- | --- |
+| `:Claude [prompt]`, `:Codex [prompt]` | Start an agent beside the current code window. |
+| `:ClaudeTour [topic]`, `:CodexTour [topic]` | Start a guided walkthrough. Say "next" or ask questions at each stop. |
+| `:TandemClear` | Remove all highlights and comparison panes. |
 
-Both agents use the same editor-control helper. Their normal coding tools handle
-file edits and tests; the helper reads and navigates live buffers without writing
-them. The bundled instructions tell the agent to check for unsaved text before
-editing and verify the live view after disk changes. Vim may need `:checktime`
-to reload an unmodified buffer after a disk edit; the helper does not reload it.
-Tour mode does not authorize source edits or saves.
+- Without a prompt, the agent looks at your code window and asks what you want.
+- With selected lines, the agent is told which lines you mean.
+- Run the command again to return to the agent. A prompt is typed into its
+  input, ready to send. `:Claude!` and `:Codex!` start over with a fresh agent.
+- Hide the agent with `:q` and bring it back with the same command. To leave
+  the agent's terminal, press `<C-\><C-n>`, then `<C-w>h` to reach your code.
+- Each code window has its own agent, so you can run several at once. If you
+  close an agent's code window, run the command again to give it a new one.
+- When the agent exits, its highlights disappear. After a clean exit, its pane
+  closes too.
 
-Notes and highlighting do not edit source text. Navigation preserves unsaved
-buffers, suppresses navigation-triggered autosave hooks, and keeps the agent's
-terminal focused. File-loading and syntax events still run normally.
+## What the agent can do
 
-Run `:TandemClear` to remove all annotations and temporary comparison panes, in
-either mode. Close the terminal split normally when finished. Each source window
-has its own session; start an agent from another code window to change targets.
+- Read your buffers, including unsaved changes.
+- Open files in your code window and highlight lines with short notes.
+- Compare the current file with `HEAD` or any Git revision.
+- Edit files with its usual tools. Tandem reloads buffers that have no unsaved
+  changes, so you see the edits.
 
-For a PR walkthrough, have the PR's code checked out locally and identify its
-intended base. The plugin does not automatically check out or fetch PRs.
+It never writes, saves, or discards your buffers, and it won't move your code
+window while you're typing in it. Highlights and notes never change the file.
 
-## Configure
+## Permissions
 
-Defaults work without configuration. Optional Vimscript settings work in both editors:
+The agent drives your editor by running a small helper, `tandem`, in its shell.
+Tandem keeps your agent's permission settings and adds only what the helper
+needs:
+
+- **Claude Code:** Tandem passes `--settings` with an allow rule for
+  `Bash(tandem *)`, plus access to the editor's socket in case Claude's sandbox
+  is on. These add to your own settings, and your deny and ask rules still win.
+- **Codex:** a session can't be granted the helper alone, so Tandem adds
+  nothing. If Codex runs sandboxed, as it does by default, it asks to run its
+  first `tandem` command outside the sandbox. Approve it with "don't ask again",
+  or add this line to `~/.codex/rules/default.rules`:
+
+  ```
+  prefix_rule(pattern=["tandem"], decision="allow")
+  ```
+
+  The rule lets only commands that start with `tandem` run outside the sandbox.
+
+## Configuration
+
+Tandem works without configuration.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `g:tandem_claude_cmd` | `['claude']` | Command that starts Claude Code. |
+| `g:tandem_codex_cmd` | `['codex', '--no-daemon']` | Command that starts Codex. `--no-daemon` runs Codex's commands in this session, where they can reach the editor. |
+| `g:tandem_width` | `0.42` | Agent pane width, as a fraction of the screen or a number of columns. |
 
 ```vim
-let g:tandem_codex_cmd = ['codex', '--no-daemon']
-let g:tandem_claude_cmd = ['claude']
-let g:tandem_width = 0.42
+let g:tandem_claude_cmd = ['claude', '--model', 'opus']
+let g:tandem_width = 90
 ```
 
-Neovim also supports Lua configuration, including lazy.nvim's `opts`:
+Neovim also accepts Lua, including lazy.nvim's `opts`:
 
 ```lua
-require("tandem").setup({ width = 0.42 })
+require("tandem").setup({ claude_cmd = { "claude", "--model", "opus" }, width = 90 })
 ```
 
-Use an absolute executable path if a GUI-launched MacVim cannot find your agent.
-Both modes use the corresponding agent command. A custom command receives one
-appended initial prompt. Keep the process local so its shell tools inherit the
-connection variables; `--no-daemon` does this for Codex. Claude uses its normal
-interactive CLI. The plugin leaves each agent's permission and model settings
-alone. The highlight groups are `TandemRange` and `TandemNote`.
+A command can be a list or a string; use a list if an argument contains spaces.
+Tandem appends its own arguments and the prompt, so a wrapper script must pass
+its arguments on to the agent. If a MacVim started from the Dock can't find the
+agent, use its full path.
 
-## Helper commands
-
-The launcher supplies the bundled helper's absolute path:
-
-```sh
-"$TANDEM_CLI" state
-"$TANDEM_CLI" read --start 20 --end 80
-"$TANDEM_CLI" show src/server.py --line 24 --end 38 --note "Request entry"
-"$TANDEM_CLI" highlight 45 --end 53 --note "Retry handling"
-"$TANDEM_CLI" diff src/server.py --base HEAD
-"$TANDEM_CLI" clear
-```
-
-Editor responses are JSON with `ok` and either `result` or `error`. Errors have
-a nonzero exit status; usage and connection failures go to stderr. Paths resolve
-from the calling shell's working directory. Line numbers are one-based and
-inclusive. `read` includes unsaved text and defaults to 80 lines. `diff` defaults
-to the current code buffer and `HEAD`; its baseline is temporary and read-only.
-An added file gets an empty baseline; deleted files also work.
-
-For use outside the agent split, call `skills/tandem/scripts/tandem` from
-this checkout with `--editor neovim|vim|macvim --server ADDRESS --window ID` before
-the command. `:echo v:servername` shows the server address; `:echo win_getid()`
-shows the code window ID. The helper refuses a closed or special-buffer target.
+Highlights use `TandemRange` and `TandemNote`, linked to `Visual` and `Special`.
 
 ## Troubleshooting
 
-- **An agent command is unknown:** restart the editor, load the plugin with your manager,
-  or use `:packadd tandem` for a native package. With lazy loading, include
-  all four agent commands in the plugin spec as shown above.
-- **Agent executable is missing:** install that CLI and sign in, or set its
-  `g:tandem_codex_cmd` / `g:tandem_claude_cmd` to an absolute path.
-- **Codex rejects `--no-daemon`:** update Codex or configure an older CLI that runs
-  locally with `g:tandem_codex_cmd = ['codex']`.
-- **Connection fails:** start with `:Codex` or `:Claude` from a code window. MacVim's native
-  server needs its GUI; terminal Vim needs a compatible remote transport.
-  The launcher binds the exact running editor executable, avoiding system Vim.
-  The agent's shell must be allowed to access the local editor socket through its
-  normal sandbox/approval settings.
-- **Tab already contains a diff:** finish that comparison first or use another
-  tab. The editor shares one diff group per tab.
+- **The command doesn't exist.** Restart the editor, or run `:packadd tandem`
+  for an `opt` package.
+- **The executable was not found.** Install the agent and sign in, or set
+  `g:tandem_claude_cmd` or `g:tandem_codex_cmd` to its full path.
+- **The agent can't reach the editor.** For Codex, allow the `tandem` command as
+  described under [Permissions](#permissions). Otherwise run `:Claude!` or
+  `:Codex!` from a code window. MacVim's server needs its GUI; terminal Vim
+  needs a remote transport such as `+socketserver`.
+- **This tab already has a diff open.** Close that comparison or use another
+  tab. Vim and Neovim share one diff per tab.
+- **Codex rejects `--no-daemon`.** Update Codex, or set
+  `g:tandem_codex_cmd = ['codex']`.
 
-## Uninstall
+## How it works
 
-Remove the plugin through your plugin manager, or undo the shell installation:
+`:Claude` and `:Codex` open the agent in a terminal split, put the `tandem`
+helper from `skills/tandem/scripts` on its `PATH`, and give it the instructions
+in `skills/tandem/SKILL.md`. The helper uses the editor's built-in remote
+client:
 
 ```sh
-./install.sh --uninstall
-./install.sh --editor vim --uninstall
-./install.sh --editor both --uninstall
+tandem state                                    # code window, cursor, open buffers, unsaved changes
+tandem read [FILE] [--start N] [--end N]
+tandem show FILE [--start N] [--end N] [--note TEXT]
+tandem highlight --start N [--end N] [--note TEXT]
+tandem diff [FILE] [--base REV]
+tandem clear
 ```
 
-Use the same custom directory flags as installation. Only links to this checkout
-are removed; your source and configuration stay in place.
+It prints JSON and exits nonzero on errors. To use it outside an agent pane,
+pass `--server` (from `:echo v:servername`) and `--window` (from
+`:echo win_getid()`), plus `--editor vim` for Vim or `--editor macvim` for
+MacVim.
 
-## Migrating from the development name
-
-If you installed an earlier checkout as `neovim-tour`, remove its old
-plugin-manager entry or package symlink before installing Tandem, so both copies
-do not load. Update any custom configuration and scripts:
-
-| Previous name | Tandem name |
-| --- | --- |
-| `require("neovim_tour")` | `require("tandem")` |
-| `g:neovim_tour_*` | `g:tandem_*` |
-| `NEOVIM_TOUR_*` | `TANDEM_*` |
-| `:TourClear` | `:TandemClear` |
-| `skills/neovim-tour/scripts/nvim-tour` | `skills/tandem/scripts/tandem` |
-
-Very early installations also created links at `~/.agents/skills/neovim-tour`
-and `~/.local/bin/nvim-tour`; those links are no longer needed. Restart the editor
-after switching installations.
-
-## Develop
-
-Python is used only for the development test suite:
+## Development
 
 ```sh
 python3 -m unittest discover -s tests -v
-shellcheck install.sh skills/tandem/scripts/tandem
+shellcheck skills/tandem/scripts/tandem
 ```
 
-Tests use real headless editors, temporary Git repositories, and fake agent
-processes. They never call a model or require credentials. For Vim coverage,
-set `VIM_TEST_BINARY=/path/to/vim` to a terminal Vim with `+socketserver`.
-Normal discovery never opens GUI windows. MacVim native GUI tests are explicitly
-opt-in via `MACVIM_GUI_TESTS=1 MACVIM_BINARY=/path/to/MacVim.app/Contents/MacOS/Vim`.
+The tests drive real headless editors in temporary Git repositories. Vim tests
+need terminal Vim with `+socketserver` (`VIM_TEST_BINARY=/path/to/vim`), and
+MacVim GUI tests are opt-in (`MACVIM_GUI_TESTS=1`). The Codex permission checks
+run when Codex is installed. `TANDEM_AGENT_E2E=1` also runs Claude Code and
+Codex against a live editor with your signed-in CLIs, for a fraction of a cent.
 
-MIT licensed.
+## License
+
+MIT

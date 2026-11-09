@@ -1,0 +1,79 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  neovim:
+    name: Neovim ${{ matrix.version }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        version: [stable, nightly]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1.6.1
+        with:
+          neovim: true
+          version: ${{ matrix.version }}
+      - run: python3 -m unittest discover -s tests -p test_neovim.py -v
+
+  vim:
+    name: Vim ${{ matrix.version }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Terminal Vim reaches its server through +socketserver, which Vim 9.2
+        # builds without X11.
+        version: [v9.2.1310]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/vim
+          key: vim-${{ matrix.version }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Build Vim
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo apt-get update -q && sudo apt-get install -yq libncurses-dev
+          fi
+          git clone -q --depth 1 --branch "${{ matrix.version }}" https://github.com/vim/vim.git "$RUNNER_TEMP/vim"
+          cd "$RUNNER_TEMP/vim"
+          ./configure --with-features=huge --enable-gui=no --without-x --disable-nls --prefix="$HOME/vim"
+          make -j4
+          make install
+      - name: Check Vim features
+        # Without these features the Vim tests would skip instead of fail.
+        run: |
+          features=$("$HOME/vim/bin/vim" --version)
+          for feature in +clientserver +socketserver +terminal +textprop; do
+            grep -qF -- "$feature" <<<"$features" || { echo "Vim lacks $feature"; exit 1; }
+          done
+      - run: VIM_TEST_BINARY="$HOME/vim/bin/vim" python3 -m unittest discover -s tests -p test_vim.py -v
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: shellcheck skills/tandem/scripts/tandem
+
+  passed:
+    # The one check that main requires, so the jobs above can change freely.
+    name: Tests passed
+    if: always()
+    needs: [neovim, vim, shellcheck]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1

@@ -1,9 +1,30 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Lets a coding agent read and drive the user's editor. :Claude and :Codex set
+# TANDEM_EDITOR, TANDEM_SERVER, and TANDEM_WINDOW for the agent.
 set -euo pipefail
 
-fail() { printf '%s\n' "$*" >&2; exit 1; }
+usage() {
+  cat <<'USAGE'
+Usage: tandem [--editor neovim|vim|macvim] [--server ADDRESS] [--window ID] COMMAND
+
+Commands:
+  state                                          Code window, cursor, open buffers, unsaved changes
+  read [FILE] [--start N] [--end N]              Live text, including unsaved edits (80 lines)
+  show FILE [--start N] [--end N] [--note TEXT]  Open a file in the code window
+  highlight --start N [--end N] [--note TEXT]    Highlight lines of the code window's file
+  diff [FILE] [--base REV]                       Compare with a Git revision (default: HEAD)
+  clear                                          Remove highlights and the comparison
+USAGE
+}
+
+fail() { printf 'tandem: %s\n' "$*" >&2; exit 1; }
+
+# Quotes a value as a Vim string literal, in which only '' is special.
+# printf -v, unlike $(...), keeps trailing newlines.
 quote() { local value=${1//\'/\'\'}; printf -v literal "'%s'" "$value"; }
 
+# Runs a command and kills it if the editor does not answer in time. The
+# watchdog's sleep runs in its own subshell so that it can be stopped too.
 rpc() (
   "$@" &
   request=$!
@@ -15,7 +36,7 @@ rpc() (
         wait "$sleeper" 2>/dev/null || :
       fi
     ' EXIT
-    command -p sleep 10 &
+    command -p sleep "$timeout" &
     sleeper=$!
     wait "$sleeper"
     kill -KILL "$request" 2>/dev/null || :
@@ -35,40 +56,42 @@ if [[ -z $editor ]]; then
 fi
 server=${TANDEM_SERVER:-}
 window=${TANDEM_WINDOW:-}
+timeout=${TANDEM_TIMEOUT:-10}
 while (($#)); do
   case $1 in
     --editor|--server|--window)
-      (($# >= 2)) || fail "Missing value for $1"
+      (($# >= 2)) || fail "Missing value for $1."
       case $1 in
         --editor) editor=$2 ;;
         --server) server=$2 ;;
         --window) window=$2 ;;
       esac
       shift 2 ;;
-    -h|--help)
-      printf '%s\n' 'Usage: tandem [--editor neovim|vim|macvim] [--server ADDRESS] [--window ID] COMMAND' \
-        'Commands: state | read [--start N] [--end N] | show FILE [--line N] [--end N] [--note TEXT]' \
-        '          highlight N [--end N] [--note TEXT] | diff [FILE] [--base REV] | clear'
-      exit 0 ;;
+    -h|--help) usage; exit 0 ;;
     *) break ;;
   esac
 done
-(($#)) || fail 'A command is required. See --help.'
-[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start with :Codex or :Claude, or supply --window.'
+(($#)) || { usage >&2; exit 1; }
+[[ $timeout =~ ^[0-9]+$ && $timeout != 0 ]] || fail 'TANDEM_TIMEOUT must be a positive number of seconds.'
+[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start the agent with :Claude or :Codex, or pass --window.'
+# The editor's own binary is the surest client, unless an upgrade removed it.
+binary=${TANDEM_EDITOR_BIN:-}
 case $editor in
   neovim)
-    server=${server:-${TANDEM_SOCKET:-${NVIM:-}}}
-    client=("${TANDEM_NVIM:-nvim}" --server "$server") ;;
+    server=${server:-${NVIM:-}}
+    [[ -x $binary ]] || binary=nvim
+    client=("$binary" --server "$server") ;;
   vim|macvim)
     server=${server:-${VIM_SERVERNAME:-}}
-    executable=vim
-    if [[ $editor == macvim ]]; then executable=mvim; fi
-    client=("${TANDEM_VIM:-$executable}" --servername "$server") ;;
-  *) fail "Unknown editor: $editor" ;;
+    if [[ ! -x $binary ]]; then
+      binary=vim
+      if [[ $editor == macvim ]]; then binary=mvim; fi
+    fi
+    client=("$binary" --servername "$server") ;;
+  *) fail "Unknown editor: $editor." ;;
 esac
-[[ -n $server ]] || fail 'No editor connection. Start with :Codex or :Claude, or supply --server.'
+[[ -n $server ]] || fail 'No editor connection. Start the agent with :Claude or :Codex, or pass --server.'
 
-# Single-quoted Vim literals preserve arbitrary text without executing it.
 expression='tandem#Command(['
 for argument in "$@"; do
   quote "$argument"
@@ -78,8 +101,17 @@ quote "$PWD"
 expression+="],$literal,"
 quote "$window"
 expression+="$literal)"
-response=$(rpc "${client[@]}" --remote-expr "$expression") || fail 'Editor RPC failed or timed out. Check the connection and plugin installation.'
-status=${response%%$'\n'*}
-[[ $status == 0 || $status == 1 ]] || fail 'Unexpected editor response. Update the plugin and restart the editor.'
+
+status=0
+response=$(rpc "${client[@]}" --remote-expr "$expression") || status=$?
+if ((status == 137)); then
+  fail "The editor did not answer within ${timeout}s; it may be waiting for input. Try again."
+elif ((status != 0)) || [[ -z $response ]]; then
+  # Vim's client exits 0 when it cannot connect.
+  fail "Could not reach the editor at $server. If this shell is sandboxed, rerun the same command" \
+    'with permission to run outside the sandbox. Otherwise ask the user to restart :Claude or :Codex.'
+fi
+code=${response%%$'\n'*}
+[[ $code == 0 || $code == 1 ]] || fail 'Unexpected editor response. Is the Tandem plugin loaded? Restart the editor after updating it.'
 printf '%s\n' "${response#*$'\n'}"
-exit "$status"
+exit "$code"
