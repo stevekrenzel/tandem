@@ -622,7 +622,11 @@ endfunction
 function! s:Run(args) abort
   let action = a:args.action
   let window = s:Target(a:args.session, action)
-  call s:Refresh(winbufnr(window))
+  " The agent may have edited any file with its own tools, so reload every
+  " buffer on screen, not only the one it's working in.
+  for buffer in uniq(sort(map(getwininfo(), 'v:val.bufnr'), 'n'))
+    call s:Refresh(buffer)
+  endfor
   " Insert mode, a half-typed command, or a pending operator would land in
   " whatever the code window shows next.
   if index(['show', 'highlight', 'diff', 'ex'], action) >= 0
