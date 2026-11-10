@@ -255,6 +255,15 @@ class VimCases:
         self.assertEqual(self.call("read", "--end", "1")["result"]["lines"], ["user edit"])
         self.assertTrue(self.expr("getbufvar(%d,'&modified')" % self.buffer))
 
+    def test_commands_reload_every_window_whose_file_changed_on_disk(self):
+        self.commands("execute 'split' fnameescape(%s)" % json.dumps(str(self.other)), "wincmd p")
+        other = self.expr("bufnr(%s)" % json.dumps(str(self.other)))
+        self.other.write_text("agent edit\n" + self.other.read_text())
+        later = time.time() + 5
+        os.utime(self.other, (later, later))
+        self.call("state")
+        self.assertEqual(self.expr("getbufline(%d,1)" % other), ["agent edit"])
+
     def test_quoted_multiline_notes_are_literal(self):
         note = "O'Brien\nü \\ $HOME `touch sentinel` $(touch sentinel) ');throw 'injected"
         self.call("highlight", "--start", "2", "--note", note)
