@@ -53,6 +53,9 @@ class VimCases:
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self.stop)
         wait_for(self.ready, timeout=10, message="Vim did not start its server")
+        if self.use_gui:
+            # Leave room for every test pane, regardless of the GUI's initial size.
+            self.commands("set columns=120 lines=40")
         self.source = self.expr("win_getid()")
         self.commands("execute 'edit ' . fnameescape(" + vim_string(str(self.file)) + ")")
         self.buffer = self.expr("bufnr()")
@@ -111,8 +114,9 @@ class VimCases:
 
     def launch(self, command, window=None):
         """Runs a launch command as the user would and reports where it left the user."""
-        self.commands("call win_gotoid(%d)" % (window or self.source), "let v:errmsg = ''", command)
-        return {"window": self.expr("win_getid()"), "buffer": self.expr("bufnr()"), "error": self.expr("v:errmsg")}
+        output = self.commands("call win_gotoid(%d)" % (window or self.source), "let v:errmsg = ''", command)
+        return {"window": self.expr("win_getid()"), "buffer": self.expr("bufnr()"),
+                "error": self.expr("v:errmsg"), "output": output}
 
     def screen_text(self, buffer):
         return self.expr("join(map(range(1, term_getsize(%d)[0]), 'term_getline(%d, v:val)'))" % (buffer, buffer))
@@ -167,9 +171,44 @@ class VimCases:
         self.commands("let g:tandem_claude_cmd = [%s]" % vim_string(str(self.agent())))
         self.launch("Claude")
         wait_for(lambda: launches(self.log))
-        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
-        self.commands("call win_execute(%d, 'close')" % split)
+        for close in ("user", "agent"):
+            for comparison in (False, True):
+                with self.subTest(close=close, comparison=comparison):
+                    split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+                    other = self.expr("winbufnr(%d)" % split)
+                    self.call("highlight", "--start", "1", "--note", "gone with the split")
+                    baseline = self.call("diff")["result"]["baseline_window"] if comparison else None
+                    if close == "user":
+                        self.commands("call win_execute(%d, 'close')" % split)
+                    else:
+                        self.assertEqual(self.call("ex", "close")["result"]["window"], self.source)
+                    self.assertEqual(self.call("state")["result"]["target"], self.source)
+                    self.assertEqual(self.properties(other), [])
+                    if baseline:
+                        self.assertEqual(self.expr("win_id2tabwin(%d)" % baseline), [0, 0])
+
+    def test_ex_closes_a_comparison_without_a_running_agent(self):
+        self.call("ex", "vsplit", "other.py")
+        baseline = self.call("diff")["result"]["baseline_window"]
+        self.assertEqual(self.call("ex", "close")["result"]["window"], self.source)
         self.assertEqual(self.call("state")["result"]["target"], self.source)
+        self.assertEqual(self.expr("win_id2tabwin(%d)" % baseline), [0, 0])
+
+    def test_agents_keep_their_sessions_when_a_starting_window_is_reused(self):
+        self.commands("let g:tandem_claude_cmd = [%s]" % vim_string(str(self.agent())), "let g:tandem_width = 20")
+        first = self.launch("Claude")
+        first_key = wait_for(lambda: launches(self.log))[0]["env"]["TANDEM_WINDOW"]
+        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+        self.launch("Claude", window=self.source)
+        second_key = wait_for(lambda: launches(self.log)[1:])[0]["env"]["TANDEM_WINDOW"]
+        self.assertNotEqual(first_key, second_key)
+        for key, window, line in ((first_key, split, 2), (second_key, self.source, 3)):
+            self.assertEqual(self.call("--window", key, "state")["result"]["target"], window)
+            self.call("--window", key, "highlight", "--start", str(line), "--note", key)
+            self.assertEqual(self.notes(self.expr("winbufnr(%d)" % window)), [key])
+        self.commands("bwipeout! %d" % first["buffer"])
+        self.assertEqual(self.call("--window", second_key, "state")["result"]["target"], self.source)
+        self.assertEqual(self.notes(), [second_key])
 
     def test_unreachable_editor_explains_sandbox_and_restart(self):
         # Vim's client exits 0 when it cannot connect.
@@ -458,9 +497,31 @@ class VimCases:
 
     def test_starting_codex_lets_it_run_tandem_commands_without_asking(self):
         rules = Path(self.env["CODEX_HOME"]) / "rules/tandem.rules"
-        self.commands("let g:tandem_codex_cmd = [%s]" % vim_string(str(self.agent())))
-        self.assertEqual(self.launch("Codex")["error"], "")
+        agent = vim_string(str(self.agent()))
+        self.commands("let g:tandem_claude_cmd = [%s]" % agent, "let g:tandem_codex_cmd = [%s]" % agent)
+        self.assertEqual(self.launch("Claude")["error"], "")
+        self.assertFalse(rules.exists())
+        self.commands("let g:tandem_codex_rules = 0")
+        self.assertEqual(self.launch("Codex!")["error"], "")
+        self.assertFalse(rules.exists())
+        self.commands("let g:tandem_codex_rules = 1")
+        self.assertEqual(self.launch("Codex!")["error"], "")
         self.assertIn(documented_codex_rule(), rules.read_text().splitlines())
+
+    def test_codex_rules_write_failures_are_visible_and_can_be_retried(self):
+        rules = Path(self.env["CODEX_HOME"]) / "rules"
+        rules.mkdir(parents=True)
+        rules.chmod(0o500)
+        self.addCleanup(rules.chmod, 0o700)
+        self.commands("let g:tandem_codex_cmd = [%s]" % vim_string(str(self.agent())))
+        launched = self.launch("Codex")
+        self.assertEqual(launched["error"], "")
+        wait_for(lambda: launches(self.log))
+        self.assertFalse((rules / "tandem.rules").exists())
+        self.assertIn("Could not write " + str(rules / "tandem.rules"), launched["output"])
+        rules.chmod(0o700)
+        self.assertEqual(self.launch("Codex!")["error"], "")
+        self.assertIn(documented_codex_rule(), (rules / "tandem.rules").read_text())
 
     def test_selected_lines_are_included_in_the_prompt(self):
         self.commands("let g:tandem_claude_cmd = [%s]" % vim_string(str(self.agent())))

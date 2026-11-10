@@ -9,15 +9,17 @@ let s:sid = expand('<SID>')
 let s:agents = {
       \ 'claude': {'name': 'Claude', 'command': ['claude']},
       \ 'codex': {'name': 'Codex', 'command': ['codex', '--no-daemon']}}
-" Each code window that an agent works with has a session. The agent names its
-" session in every request by the ID of the window it started from, which is
-" the session's key even after the user closes that window:
+" Each code window that an agent works with has a session. Its key is normally
+" its starting window's ID and stays fixed when the agent changes windows.
+" A window whose ID is still another session's key gets a fresh negative key,
+" which cannot collide with a window ID:
 "   key, window: the session's key and its current code window
 "   namespace (Neovim) or range_type and note_type (Vim): annotation storage
 "   marked_buffer: the buffer that currently shows annotations
 "   diff: {source, window, buffer} while a comparison is open
 "   agent, mode, terminal: the agent, its mode, and its terminal buffer
 let s:sessions = {}
+let s:next_session_key = -1
 " Moving the code window must not fire the user's autosave or focus hooks.
 let s:navigation_events = ['BufLeave', 'BufWinLeave', 'BufEnter', 'BufWinEnter', 'WinLeave', 'WinEnter', 'FocusLost']
 " Comparisons sit side by side when each side can keep 80 columns.
@@ -105,6 +107,10 @@ function! s:Session(window) abort
     return state
   endif
   let key = string(a:window)
+  if has_key(s:sessions, key)
+    let key = string(s:next_session_key)
+    let s:next_session_key -= 1
+  endif
   let state = {'key': key, 'window': a:window}
   if has('nvim')
     let state.namespace = nvim_create_namespace('tandem:' . key)
@@ -416,12 +422,18 @@ let s:codex_rules = [
       \ '# run the `tandem` helper, which drives your editor, without asking.',
       \ '# To manage this file yourself, set g:tandem_codex_rules = 0.',
       \ 'prefix_rule(pattern=["tandem"], decision="allow")']
+let s:codex_rules_error = ''
 
 function! tandem#CodexRulesFile() abort
   return (empty($CODEX_HOME) ? expand('~/.codex') : $CODEX_HOME) . '/rules/tandem.rules'
 endfunction
 
+function! tandem#CodexRulesError() abort
+  return s:codex_rules_error
+endfunction
+
 function! s:WriteCodexRules() abort
+  let s:codex_rules_error = ''
   let path = tandem#CodexRulesFile()
   if !get(g:, 'tandem_codex_rules', 1) || filereadable(path)
     return
@@ -430,7 +442,10 @@ function! s:WriteCodexRules() abort
     call mkdir(fnamemodify(path, ':h'), 'p')
     call writefile(s:codex_rules, path)
   catch
-    " Without the file, Codex asks before it runs the helper.
+    let s:codex_rules_error = printf('Could not write %s: %s', path, s:Message(v:exception))
+    echohl WarningMsg
+    echomsg 'Tandem: ' . s:codex_rules_error
+    echohl None
   endtry
 endfunction
 
@@ -656,10 +671,21 @@ endfunction
 " a terminal, a floating or special window, or another agent's. Returns the
 " session's window.
 function! s:Follow(window, final) abort
-  if a:final == a:window || !s:CanWorkIn(a:final)
+  if a:final == a:window
     return a:window
   endif
   let state = s:Session(a:window)
+  if win_id2tabwin(a:window) == [0, 0]
+    " WinClosed runs later, after the session has moved. Clean up now; the
+    " destination may itself be the comparison pane that cleanup closes.
+    call s:ClearSession(state)
+    if win_id2tabwin(a:final) == [0, 0]
+      return s:Replacement(state)
+    endif
+  endif
+  if !s:CanWorkIn(a:final)
+    return a:window
+  endif
   let other = s:Find(a:final)
   if !empty(other) && other isnot state
     return a:window
@@ -719,7 +745,7 @@ endfunction
 " user is in, the one they were in before, or another file's window, in the
 " tab that shows the agent. Returns 0 if there is none.
 function! s:Replacement(state) abort
-  let panes = win_findbuf(a:state.terminal)
+  let panes = win_findbuf(get(a:state, 'terminal', -1))
   let tab = empty(panes) ? tabpagenr() : win_id2tabwin(panes[0])[0]
   let candidates = [win_getid(), win_getid(winnr('#'))] + map(getwininfo(), 'v:val.winid')
   for window in candidates

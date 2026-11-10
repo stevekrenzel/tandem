@@ -192,8 +192,19 @@ class RealAgentTest(unittest.TestCase):
         editor = Editor(self)
         result = self.run_claude(editor, "Open other.py in a vertical split next to my code, then reply done.",
                                  lambda _: None)
-        self.assertIn("other.py", editor.files(), result.stdout)
-        self.assertIn(editor.file.name, editor.files(), result.stdout)
+        positions = editor.lua("""
+            local positions = {}
+            local tab = vim.api.nvim_win_get_tabpage(%d)
+            for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+                local file = vim.fs.basename(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(window)))
+                positions[file] = vim.api.nvim_win_get_position(window)
+            end
+            return positions
+        """ % editor.window)
+        self.assertIn("other.py", positions, result.stdout)
+        self.assertIn(editor.file.name, positions, result.stdout)
+        self.assertEqual(positions["other.py"][0], positions[editor.file.name][0], result.stdout)
+        self.assertNotEqual(positions["other.py"][1], positions[editor.file.name][1], result.stdout)
 
     def test_claudes_sandbox_does_not_reach_the_editor(self):
         # Sandboxed commands are approved automatically, so the sandbox must not

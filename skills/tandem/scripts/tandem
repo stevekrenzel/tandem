@@ -56,6 +56,8 @@ if [[ -z $editor ]]; then
   if [[ -n ${VIM_SERVERNAME:-} && -z ${NVIM:-} ]]; then editor=vim; fi
 fi
 server=${TANDEM_SERVER:-}
+# Session keys normally match a starting window ID; reused windows get a
+# negative key so they cannot take over an existing session.
 window=${TANDEM_WINDOW:-}
 timeout=${TANDEM_TIMEOUT:-10}
 while (($#)); do
@@ -74,7 +76,7 @@ while (($#)); do
 done
 (($#)) || { usage >&2; exit 1; }
 [[ $timeout =~ ^[0-9]+$ && $timeout != 0 ]] || fail 'TANDEM_TIMEOUT must be a positive number of seconds.'
-[[ $window =~ ^[0-9]+$ && $window != 0 ]] || fail 'No code window. Start the agent with :Claude or :Codex, or pass --window.'
+[[ $window =~ ^-?[0-9]+$ && $window != 0 ]] || fail 'No code window. Start the agent with :Claude or :Codex, or pass --window.'
 # The editor's own binary is the surest client, unless an upgrade removed it.
 binary=${TANDEM_EDITOR_BIN:-}
 case $editor in

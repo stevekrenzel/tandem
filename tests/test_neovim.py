@@ -484,12 +484,46 @@ class NeovimTest(unittest.TestCase):
         self.configure(claude_cmd=[str(self.agent())])
         self.launch("Claude")
         wait_for(lambda: launches(self.log))
-        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
-        self.call("highlight", "--start", "1", "--note", "gone with the split")
-        other = self.lua("return vim.api.nvim_win_get_buf(%d)" % split)
-        self.lua("vim.api.nvim_win_close(%d, true); return true" % split)
+        for close in ("user", "agent"):
+            for comparison in (False, True):
+                with self.subTest(close=close, comparison=comparison):
+                    split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+                    other = self.lua("return vim.api.nvim_win_get_buf(%d)" % split)
+                    self.call("highlight", "--start", "1", "--note", "gone with the split")
+                    baseline = self.call("diff")["result"]["baseline_window"] if comparison else None
+                    if close == "user":
+                        self.lua("vim.api.nvim_win_close(%d, true); return true" % split)
+                    else:
+                        self.assertEqual(self.call("ex", "close")["result"]["window"], self.source)
+                    self.assertEqual(self.call("state")["result"]["target"], self.source)
+                    self.assertEqual(self.marks(other), [])
+                    if baseline:
+                        self.assertNotIn(baseline, self.windows())
+
+    def test_ex_closes_a_comparison_without_a_running_agent(self):
+        self.call("ex", "vsplit", "other.py")
+        baseline = self.call("diff")["result"]["baseline_window"]
+        self.assertEqual(self.call("ex", "close")["result"]["window"], self.source)
         self.assertEqual(self.call("state")["result"]["target"], self.source)
-        self.assertEqual(self.marks(other), [])
+        self.assertNotIn(baseline, self.windows())
+
+    def test_agents_keep_their_sessions_when_a_starting_window_is_reused(self):
+        self.configure(claude_cmd=[str(self.agent())], width=20)
+        first = self.launch("Claude")
+        first_key = wait_for(lambda: launches(self.log))[0]["env"]["TANDEM_WINDOW"]
+        split = self.call("ex", "vsplit", "other.py")["result"]["window"]
+        self.launch("Claude", window=self.source)
+        second_key = wait_for(lambda: launches(self.log)[1:])[0]["env"]["TANDEM_WINDOW"]
+        self.assertNotEqual(first_key, second_key)
+        for key, window, line in ((first_key, split, 2), (second_key, self.source, 3)):
+            self.assertEqual(self.call("--window", key, "state")["result"]["target"], window)
+            self.call("--window", key, "highlight", "--start", str(line), "--note", key)
+            buffer = self.lua("return vim.api.nvim_win_get_buf(%d)" % window)
+            self.assertEqual([(mark[1], mark[3]["virt_lines"][0][0][0]) for mark in self.marks(buffer)],
+                             [(line - 1, "  " + key)])
+        self.lua("vim.cmd('bwipeout! %d'); return true" % first["buffer"])
+        self.assertEqual(self.call("--window", second_key, "state")["result"]["target"], self.source)
+        self.assertEqual(len(self.marks()), 1)
 
 
     def test_git_comparison_does_not_use_the_configured_shell(self):
@@ -883,7 +917,10 @@ class NeovimTest(unittest.TestCase):
 
     def test_starting_codex_lets_it_run_tandem_commands_without_asking(self):
         rules = Path(self.env["CODEX_HOME"]) / "rules/tandem.rules"
-        self.configure(claude_cmd=[str(self.agent())], codex_cmd=[str(self.agent())], codex_rules=0)
+        self.configure(claude_cmd=[str(self.agent())], codex_cmd=[str(self.agent())])
+        self.assertEqual(self.launch("Claude")["error"], "")
+        self.assertFalse(rules.exists())
+        self.configure(codex_rules=0)
         for command in ("Claude", "Codex!"):
             self.assertEqual(self.launch(command)["error"], "")
         self.assertFalse(rules.exists())
@@ -895,6 +932,26 @@ class NeovimTest(unittest.TestCase):
         rules.write_text("# mine\n")
         self.launch("Codex!")
         self.assertEqual(rules.read_text(), "# mine\n")
+
+    def test_codex_rules_write_failures_are_visible_and_can_be_retried(self):
+        rules = Path(self.env["CODEX_HOME"]) / "rules"
+        rules.mkdir(parents=True)
+        rules.chmod(0o500)
+        self.addCleanup(rules.chmod, 0o700)
+        self.configure(codex_cmd=[str(self.agent())])
+        self.assertEqual(self.launch("Codex")["error"], "")
+        wait_for(lambda: launches(self.log))
+        self.assertFalse((rules / "tandem.rules").exists())
+        messages = self.lua("return vim.fn.execute('messages')")
+        self.assertIn("Could not write " + str(rules / "tandem.rules"), messages)
+        self.lua("vim.cmd('checkhealth tandem'); return true")
+        health = "\n".join(wait_for(lambda: self.lua(
+            "return vim.bo.filetype == 'checkhealth' and vim.api.nvim_buf_get_lines(0, 0, -1, false) or vim.NIL")))
+        self.assertIn("Could not write " + str(rules / "tandem.rules"), health)
+        self.assertNotIn("until you first run :Codex", health)
+        rules.chmod(0o700)
+        self.assertEqual(self.launch("Codex!")["error"], "")
+        self.assertIn(documented_codex_rule(), (rules / "tandem.rules").read_text())
 
 if __name__ == "__main__":
     unittest.main()

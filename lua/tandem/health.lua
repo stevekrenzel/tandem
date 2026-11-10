@@ -72,6 +72,7 @@ function M.check()
   if found.codex_cmd then
     local allowed = codex_allows(command(agents[2])[1], { "tandem", "ex", "vsplit" })
     local file = vim.fn["tandem#CodexRulesFile"]()
+    local write_error = vim.fn["tandem#CodexRulesError"]()
     if allowed == nil then
       vim.health.info("Could not check your Codex rules with `codex execpolicy`")
     elseif allowed then
@@ -86,6 +87,8 @@ function M.check()
     elseif vim.fn.filereadable(file) == 1 then
       vim.health.warn("Codex asks before it runs tandem commands, despite " .. file,
         "The file may have been edited, or another rule may require approval")
+    elseif write_error ~= "" then
+      vim.health.warn(write_error, "Fix the reported problem, then restart with :Codex!")
     else
       vim.health.info("Codex asks before it runs tandem commands until you first run :Codex, which writes " .. file)
     end

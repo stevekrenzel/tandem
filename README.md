@@ -89,11 +89,13 @@ Start from the code you want to work on:
 
 The agent has its own window, which starts as the one you launched it from and
 moves with its commands, as your cursor moves with yours: after it opens a
-split, it works there. Your own window, cursor, and mode stay put, and so does
-the window `CTRL-W p` returns to. If you close the agent's window, it moves to
-another one in its tab. The agent's pane keeps its width when windows split.
+split, it works there. While you're in a different window, your cursor stays
+put. Your window, mode, and the window `CTRL-W p` returns to stay put too.
+If you close the agent's window, it moves to another one in its tab. The
+agent's pane keeps its width when windows split.
 
-Tandem won't act in the agent's window while you're typing in it, and
+If you focus the agent's window, navigation moves your shared cursor; the
+agent is told to ask first. Tandem won't act there while you're typing, and
 highlights and notes never change the file. The agent is told not to save,
 reload, or discard your unsaved changes unless you ask, and to close the splits
 and tabs it opens once they stop helping.
