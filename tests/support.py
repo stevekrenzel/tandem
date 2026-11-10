@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import struct
 import subprocess
 import termios
@@ -14,6 +15,18 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "skills/tandem/scripts/tandem"
 SKILL = ROOT / "skills/tandem/SKILL.md"
+
+
+# The session settings Tandem gives Claude: every tandem command runs without
+# asking, outside Claude's sandbox.
+CLAUDE_SETTINGS = {"permissions": {"allow": ["Bash(tandem *)"]}, "sandbox": {"excludedCommands": ["tandem *"]}}
+
+
+def documented_codex_rule():
+    """The Codex rule that README says Tandem writes."""
+    match = re.search(r'^\s*(prefix_rule\(.*"tandem".*\))\s*$', (ROOT / "README.md").read_text(), re.MULTILINE)
+    assert match, "README must show the Codex rule"
+    return match.group(1)
 
 
 def clean_env(**extra):

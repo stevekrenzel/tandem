@@ -1,8 +1,9 @@
 # Tandem
 
 Work with Claude Code or Codex inside Neovim, Vim, or MacVim. The agent runs in
-a split beside your code and sees what you see: it reads your unsaved buffers,
-opens files, highlights code with notes, and shows Git comparisons.
+a split beside your code and shares the editor with you as an equal: it reads
+your unsaved buffers, opens files and splits, runs any command you could type
+after `:`, highlights code with notes, and shows Git comparisons.
 
 ![:ClaudeTour how does checkout compute the total? opens Claude beside the code. Each time the user says next, Claude shows the next stop in the editor (checkout, the cart subtotal, discount codes, then sales tax), highlights it with a short note, and explains it.](.github/tour.gif)
 
@@ -11,8 +12,7 @@ opens files, highlights code with notes, and shows Git comparisons.
 - `:Claude` or `:Codex` to work through a task together.
 - `:ClaudeTour` or `:CodexTour` for a guided walkthrough, one stop at a time.
 
-Tandem never writes your buffers. There is nothing else to install: no server,
-Python, or Node package.
+There is nothing else to install: no server, Python, or Node package.
 
 ## Requirements
 
@@ -72,40 +72,55 @@ Start from the code you want to work on:
 - Hide the agent with `:q` and bring it back with the same command. To leave
   the agent's terminal, press `<C-\><C-n>`, then `<C-w>h` to reach your code.
 - Each code window has its own agent, so you can run several at once. If you
-  close an agent's code window, run the command again to give it a new one.
+  close an agent's window and its tab has no other file's window, run the
+  command again to give it a new one.
 - When the agent exits, its highlights disappear. After a clean exit, its pane
   closes too.
 
 ## What the agent can do
 
 - Read your buffers, including unsaved changes.
-- Open files in your code window and highlight lines with short notes.
+- Open files in its window and highlight lines with short notes.
 - Compare the current file with `HEAD` or any Git revision.
+- Run any Ex command, as if typed after `:`. It can split, open tabs, jump,
+  fold, search, or edit with `:normal`, just as you would.
 - Edit files with its usual tools. Tandem reloads buffers that have no unsaved
   changes, so you see the edits.
 
-It never writes, saves, or discards your buffers, and it won't move your code
-window while you're typing in it. Highlights and notes never change the file.
+The agent has its own window, which starts as the one you launched it from and
+moves with its commands, as your cursor moves with yours: after it opens a
+split, it works there. While you're in a different window, your cursor stays
+put. Your window, mode, and the window `CTRL-W p` returns to stay put too.
+If you close the agent's window, it moves to another one in its tab. The
+agent's pane keeps its width when windows split.
+
+If you focus the agent's window, navigation moves your shared cursor; the
+agent is told to ask first. Tandem won't act there while you're typing, and
+highlights and notes never change the file. The agent is told not to save,
+reload, or discard your unsaved changes unless you ask, and to close the splits
+and tabs it opens once they stop helping.
 
 ## Permissions
 
 The agent drives your editor by running a small helper, `tandem`, in its shell.
-Tandem keeps your agent's permission settings and adds only what the helper
-needs:
+Tandem lets the agent run every `tandem` command without asking, and leaves
+everything else to your agent's own permissions.
 
-- **Claude Code:** Tandem passes `--settings` with an allow rule for
-  `Bash(tandem *)`, plus access to the editor's socket in case Claude's sandbox
-  is on. These add to your own settings, and your deny and ask rules still win.
-- **Codex:** a session can't be granted the helper alone, so Tandem adds
-  nothing. If Codex runs sandboxed, as it does by default, it asks to run its
-  first `tandem` command outside the sandbox. Approve it with "don't ask again",
-  or add this line to `~/.codex/rules/default.rules`:
+- **Claude Code:** Tandem passes `--settings` that allow `Bash(tandem *)` and
+  run the helper outside Claude's sandbox, so that only the helper can reach
+  your editor. These add to your own settings, and your deny and ask rules
+  still win.
+- **Codex:** Codex reads permissions only from rule files, so the first time you
+  run `:Codex`, Tandem writes `~/.codex/rules/tandem.rules` (under `$CODEX_HOME`
+  if you set it) with this rule, which lets `tandem` commands run outside
+  Codex's sandbox without asking:
 
   ```
   prefix_rule(pattern=["tandem"], decision="allow")
   ```
 
-  The rule lets only commands that start with `tandem` run outside the sandbox.
+  Tandem never changes the file once it exists. To manage your rules yourself,
+  set `g:tandem_codex_rules` to `0`.
 
 ## Configuration
 
@@ -116,6 +131,7 @@ Tandem works without configuration.
 | `g:tandem_claude_cmd` | `['claude']` | Command that starts Claude Code. |
 | `g:tandem_codex_cmd` | `['codex', '--no-daemon']` | Command that starts Codex. `--no-daemon` runs Codex's commands in this session, where they can reach the editor. |
 | `g:tandem_width` | `0.42` | Agent pane width, as a fraction of the screen or a number of columns. |
+| `g:tandem_codex_rules` | `1` | Write `~/.codex/rules/tandem.rules`, which lets Codex run `tandem` commands without asking. |
 
 ```vim
 let g:tandem_claude_cmd = ['claude', '--model', 'opus']
@@ -141,9 +157,10 @@ Highlights use `TandemRange` and `TandemNote`, linked to `Visual` and `Special`.
   for an `opt` package.
 - **The executable was not found.** Install the agent and sign in, or set
   `g:tandem_claude_cmd` or `g:tandem_codex_cmd` to its full path.
-- **The agent can't reach the editor.** For Codex, allow the `tandem` command as
-  described under [Permissions](#permissions). Otherwise run `:Claude!` or
-  `:Codex!` from a code window. MacVim's server needs its GUI; terminal Vim
+- **The agent can't reach the editor.** For Codex, check that Tandem's rules
+  file exists, as described under [Permissions](#permissions); in Neovim,
+  `:checkhealth tandem` checks it. Otherwise run `:Claude!` or `:Codex!` from a
+  code window. MacVim's server needs its GUI; terminal Vim
   needs a remote transport such as `+socketserver`.
 - **This tab already has a diff open.** Close that comparison or use another
   tab. Vim and Neovim share one diff per tab.

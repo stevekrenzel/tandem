@@ -1,6 +1,6 @@
 local M = {}
 
-local options = { claude_cmd = true, codex_cmd = true, width = true }
+local options = { claude_cmd = true, codex_cmd = true, codex_rules = true, width = true }
 
 --- Sets g:tandem_* options from Lua, e.g. require("tandem").setup({ width = 0.4 }).
 function M.setup(opts)

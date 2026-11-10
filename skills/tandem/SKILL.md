@@ -1,11 +1,12 @@
 ---
 name: tandem
-description: Work alongside the user in their live Neovim, Vim, or MacVim session. Read unsaved buffers, open files, highlight code with notes, and show Git comparisons. Use when launched by :Claude, :Codex, :ClaudeTour, or :CodexTour, or when asked to drive the connected editor.
+description: Work alongside the user in their live Neovim, Vim, or MacVim session. Read unsaved buffers, open files and splits, run any editor command, highlight code with notes, and show Git comparisons. Use when launched by :Claude, :Codex, :ClaudeTour, or :CodexTour, or when asked to drive the connected editor.
 ---
 
-You are working beside the user's editor. The `tandem` command reads and
-drives the code window they started you from. Use it rather than building
-another editor connection.
+You are working beside the user's editor as an equal partner: anything they
+can do in it, you can do too. The `tandem` command reads and drives the editor
+from your window, which starts as the code window they launched you from. Use
+it rather than building another editor connection.
 
 ## Modes
 
@@ -24,6 +25,7 @@ tandem show FILE [--start N] [--end N] [--note TEXT]
 tandem highlight --start N [--end N] [--note TEXT]
 tandem diff [FILE] [--base REV]                 # compare with a Git revision
 tandem clear                                    # remove highlights and the comparison
+tandem ex COMMAND                               # run any Ex command in your window
 ```
 
 - Output is JSON with `ok` and either `result` or `error`; failures exit nonzero.
@@ -35,6 +37,20 @@ tandem clear                                    # remove highlights and the comp
 - `diff` compares the live buffer with `HEAD`, or with `--base`, in a temporary
   read-only pane. `show`, `diff`, and `clear` replace the previous highlight
   and comparison.
+- `ex` runs a command in your window as if the user typed it after `:`, and
+  returns its output. Use it for everything else: splits (`vsplit FILE`,
+  `split`), tabs, `wincmd`, jumps and edits with `normal!`, folds, searches,
+  quickfix, help. Each line of a multi-line argument is a separate command.
+  Paths resolve from the editor's working directory, which `state` reports.
+- Your window moves with your commands, as the user's cursor does: after
+  `tandem ex 'vsplit FILE'`, you are in the new split, and `show`, `highlight`,
+  `read`, and `diff` act there. The user stays in their own window and mode.
+  To move to another window, use `tandem ex 'call win_gotoid(ID)'` with an ID
+  from `state`, whose `layout` gives the user's tab as nested `row` (side by
+  side) and `col` (stacked) splits.
+- Run shell commands with your own tools, not `:!`, so your usual permissions
+  apply. Avoid commands that wait for input, such as `:s///c` or `input()`; the
+  editor stops answering until the user responds.
 - If `tandem` is not on your PATH, run `"$TANDEM_CLI"` instead.
 - If `tandem` cannot reach the editor and your shell is sandboxed, rerun the
   same `tandem` command with permission to run outside the sandbox; the user
@@ -45,11 +61,16 @@ tandem clear                                    # remove highlights and the comp
 
 - Start with `tandem state`. Live buffers show what the user sees; trust them
   over the files on disk.
-- When `state` shows `"focus": "code"`, the user is working in the code window.
-  Ask before moving it. Tandem refuses to move it while they are typing.
+- When `state` shows `"focus": "code"`, the user is working in your window.
+  Ask before moving it. Tandem refuses to act there while they are typing.
 - Before editing a file, check whether its buffer is `modified`. Never
-  overwrite, save, reload, or discard the user's unsaved changes. If a buffer
-  and its file differ, settle that with the user before editing the file.
+  overwrite, save, reload, or discard the user's unsaved changes, with your
+  tools or with commands such as `:w`, `:e!`, `:bd!`, or `:q!`, unless they ask.
+  If a buffer and its file differ, settle that with the user before editing the
+  file. Don't quit the editor.
+- Keep the user's layout tidy: close splits and tabs you opened once they stop
+  helping, unless the user wants them. The user sees only their current tab, so
+  tell them when you open another.
 - Edit files with your usual tools. Tandem reloads buffers without unsaved
   changes from disk before each command, so `show` displays your edits.
 - Clear highlights and comparisons once they stop helping. The user can run
