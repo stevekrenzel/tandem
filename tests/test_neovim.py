@@ -12,8 +12,8 @@ import tempfile
 import time
 import unittest
 
-from support import (CLAUDE_SETTINGS, CLI, NEOVIM_STARTUP, ROOT, SKILL, Screen, clean_env, default_ask, fake_agent, git,
-                     instructions, launches, make_repo, wait_for)
+from support import (CLAUDE_SETTINGS, CLI, NEOVIM_STARTUP, ROOT, SKILL, Screen, clean_env, default_ask,
+                     documented_codex_rule, fake_agent, git, instructions, launches, make_repo, wait_for)
 
 
 @unittest.skipUnless(shutil.which("nvim"), "Neovim is required")
@@ -25,7 +25,8 @@ class NeovimTest(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         self.file, self.other = make_repo(self.directory)
         self.socket = str(self.directory / "n.sock")
-        self.env = clean_env(NVIM_LOG_FILE="/dev/null")
+        # Starting Codex writes Tandem's rules file, so keep it out of your ~/.codex.
+        self.env = clean_env(NVIM_LOG_FILE="/dev/null", CODEX_HOME=str(self.directory / "codex home"))
         self.proc = subprocess.Popen(
             ["nvim", "--headless", "-u", "NONE", "-i", "NONE", "-n",
              "--cmd", NEOVIM_STARTUP, "--listen", self.socket],
@@ -837,7 +838,7 @@ class NeovimTest(unittest.TestCase):
         commands = re.findall(r"^command!(?:\s+-\S+)*\s+(\w+)", (ROOT / "plugin/tandem.vim").read_text(), re.M)
         options = re.findall(r"`(g:tandem_\w+)`", (ROOT / "README.md").read_text())
         self.assertEqual(len(commands), 5)
-        self.assertEqual(len(set(options)), 3)
+        self.assertEqual(len(set(options)), 4)
         for tag in ["tandem", "tandem-permissions"] + [":" + name for name in commands] + options:
             self.assertIn(tag, tags)
 
@@ -856,30 +857,44 @@ class NeovimTest(unittest.TestCase):
                 self.assertEqual(codex is None, "g:tandem_codex_cmd must be" not in text, text)
 
     @unittest.skipUnless(shutil.which("codex"), "Codex is not installed")
-    def test_health_check_asks_codex_which_tandem_commands_your_rules_allow(self):
-        home = self.directory / "codex home"
-        (home / "rules").mkdir(parents=True)
-        self.lua("vim.g.tandem_codex_cmd = {%s}; vim.env.CODEX_HOME = %s; return true"
-                 % (json.dumps(shutil.which("codex")), json.dumps(str(home))))
-        documented = re.search(r'^\s*(prefix_rule\(.*"tandem".*\))\s*$', (ROOT / "README.md").read_text(), re.M).group(1)
-        for rule, advice, warning in (("", "add this line", False), (documented, "may run the tandem helper", False),
-                                      ('prefix_rule(pattern=["tandem"], decision="allow")', "may run the tandem helper",
-                                       True)):
-            with self.subTest(rule=rule):
-                (home / "rules/default.rules").write_text(rule + "\n")
+    def test_health_check_asks_codex_whether_it_may_run_tandem_commands(self):
+        rules = Path(self.env["CODEX_HOME"]) / "rules"
+        rules.mkdir(parents=True)
+        self.lua("vim.g.tandem_codex_cmd = {%s}; return true" % json.dumps(shutil.which("codex")))
+        narrow = 'prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")'
+        for rule, option, advice in ((None, 1, "until you first run :Codex"), (documented_codex_rule(), 1, "without asking"),
+                                     (None, 0, "add this line"), (narrow, 1, "despite")):
+            with self.subTest(rule=rule, codex_rules=option):
+                (rules / "tandem.rules").unlink(missing_ok=True)
+                if rule:
+                    (rules / "tandem.rules").write_text(rule + "\n")
                 self.lua("""
+                    vim.g.tandem_codex_rules = %d
                     for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
                       if vim.bo[buffer].filetype == 'checkhealth' then vim.api.nvim_buf_delete(buffer, {force=true}) end
                     end
                     vim.cmd('checkhealth tandem')
                     return true
-                """)
+                """ % option)
                 text = "\n".join(wait_for(lambda: self.lua(
                     "return vim.bo.filetype == 'checkhealth' and vim.api.nvim_buf_get_lines(0, 0, -1, false) or vim.NIL"),
                     timeout=30))
                 self.assertIn(advice, text)
-                self.assertEqual("`tandem ex` run without asking" in text, warning, text)
 
+    def test_starting_codex_lets_it_run_tandem_commands_without_asking(self):
+        rules = Path(self.env["CODEX_HOME"]) / "rules/tandem.rules"
+        self.configure(claude_cmd=[str(self.agent())], codex_cmd=[str(self.agent())], codex_rules=0)
+        for command in ("Claude", "Codex!"):
+            self.assertEqual(self.launch(command)["error"], "")
+        self.assertFalse(rules.exists())
+        self.configure(codex_rules=1)
+        self.assertEqual(self.launch("Codex!")["error"], "")
+        lines = rules.read_text().splitlines()
+        self.assertEqual([line for line in lines if not line.startswith("#")], [documented_codex_rule()])
+        # A file you already have, even an edited one, stays as it is.
+        rules.write_text("# mine\n")
+        self.launch("Codex!")
+        self.assertEqual(rules.read_text(), "# mine\n")
 
 if __name__ == "__main__":
     unittest.main()

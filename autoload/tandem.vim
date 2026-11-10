@@ -235,6 +235,9 @@ function! s:Launch(agent, mode, prompt, replace, range) abort
     let width = s:Width()
     call s:StartServer()
     let command = s:AgentCommand(a:agent) + s:AgentArguments(a:agent, a:mode, ask ==# '' ? s:DefaultAsk(a:mode) : ask)
+    if a:agent ==# 'codex'
+      call s:WriteCodexRules()
+    endif
     call s:Quietly({-> s:StartAgent(state, window, a:agent, command, width)})
   endif
   let state.mode = a:mode
@@ -393,21 +396,42 @@ endfunction
 " the helper as session settings, which add to the user's own settings.
 " Codex has no per-session equivalent, so it reads the instructions file.
 "
-" Only the helper's display commands are allowed up front. tandem ex can do
-" anything the editor can, including run shell commands, so it goes through
-" the user's usual approval, which they can make permanent. The helper runs
-" outside Claude's sandbox, where those rules apply; sandboxed commands are
-" approved automatically and must not reach the editor at all.
-let s:display_commands = ['state', 'read', 'show', 'highlight', 'diff', 'clear']
-
+" Every tandem command is allowed. The helper runs outside Claude's sandbox
+" rather than opening the editor's socket to it, so that only the helper can
+" reach the editor.
 function! s:AgentArguments(agent, mode, ask) abort
   if a:agent ==# 'claude'
-    let settings = {'permissions': {'allow': map(copy(s:display_commands), '"Bash(tandem " . v:val . " *)"')},
-          \ 'sandbox': {'excludedCommands': ['tandem *']}}
+    let settings = {'permissions': {'allow': ['Bash(tandem *)']}, 'sandbox': {'excludedCommands': ['tandem *']}}
     " After --, a prompt that starts with a dash is not read as an option.
     return ['--append-system-prompt', s:Instructions(a:mode), '--settings', json_encode(settings), '--', a:ask]
   endif
   return ['Read and follow ' . json_encode(s:skill) . '. Session mode: ' . a:mode . '. ' . a:ask]
+endfunction
+
+" Codex reads permission rules only from files, so Tandem writes one that lets
+" `tandem` commands run outside its sandbox without asking. A file the user
+" has, even an edited one, is left alone.
+let s:codex_rules = [
+      \ '# Written by Tandem (https://github.com/stevekrenzel/tandem) so that Codex can',
+      \ '# run the `tandem` helper, which drives your editor, without asking.',
+      \ '# To manage this file yourself, set g:tandem_codex_rules = 0.',
+      \ 'prefix_rule(pattern=["tandem"], decision="allow")']
+
+function! tandem#CodexRulesFile() abort
+  return (empty($CODEX_HOME) ? expand('~/.codex') : $CODEX_HOME) . '/rules/tandem.rules'
+endfunction
+
+function! s:WriteCodexRules() abort
+  let path = tandem#CodexRulesFile()
+  if !get(g:, 'tandem_codex_rules', 1) || filereadable(path)
+    return
+  endif
+  try
+    call mkdir(fnamemodify(path, ':h'), 'p')
+    call writefile(s:codex_rules, path)
+  catch
+    " Without the file, Codex asks before it runs the helper.
+  endtry
 endfunction
 
 function! s:Instructions(mode) abort

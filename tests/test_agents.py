@@ -8,15 +8,13 @@ CLIs and cost a fraction of a cent per run.
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 
-from support import NEOVIM_STARTUP, ROOT, clean_env, fake_agent, launches, make_repo, wait_for
+from support import NEOVIM_STARTUP, clean_env, documented_codex_rule, fake_agent, launches, make_repo, wait_for
 
-README = ROOT / "README.md"
 REAL_AGENTS = os.environ.get("TANDEM_AGENT_E2E") == "1"
 # The leading dash checks that a prompt is never read as a command-line option.
 PROMPT = ("- Use the tandem command to highlight line 3 of the code window with the note "
@@ -32,12 +30,6 @@ DIRECT_PROMPT = ("Run exactly this shell command once: nvim --server \"$TANDEM_S
 def codex():
     """The Codex CLI itself, bypassing any shell alias or wrapper flags."""
     return shutil.which("codex")
-
-
-def documented_codex_rule():
-    match = re.search(r'^\s*(prefix_rule\(.*"tandem".*\))\s*$', README.read_text(), re.MULTILINE)
-    assert match, "README must document the Codex prefix rule"
-    return match.group(1)
 
 
 def your_codex_rules_allow_tandem():
@@ -60,7 +52,8 @@ class Editor:
         self.directory = Path(self.tmp.name).resolve()
         self.file, _ = make_repo(self.directory)
         control = str(self.directory / "control.sock")
-        self.env = clean_env(NVIM_LOG_FILE="/dev/null")
+        # Starting Codex writes Tandem's rules file, so keep it out of your ~/.codex.
+        self.env = clean_env(NVIM_LOG_FILE="/dev/null", CODEX_HOME=str(self.directory / "codex home"))
         self.proc = subprocess.Popen(
             ["nvim", "--headless", "-u", "NONE", "-i", "NONE", "-n", "--cmd", NEOVIM_STARTUP,
              "--listen", control, str(self.file)],
@@ -109,16 +102,13 @@ class Editor:
 
 @unittest.skipUnless(codex(), "Codex is not installed")
 class CodexPermissionTest(unittest.TestCase):
-    def test_the_documented_rule_allows_only_the_tandem_helper(self):
+    def test_tandems_rule_allows_only_the_tandem_helper(self):
         with tempfile.TemporaryDirectory() as directory:
             rules = Path(directory) / "tandem.rules"
             rules.write_text(documented_codex_rule() + "\n")
             for command, allowed in ((["tandem", "state"], True),
                                      (["tandem", "show", "a.py", "--start", "3", "--note", "x"], True),
-                                     (["tandem", "diff"], True),
-                                     (["tandem", "clear"], True),
-                                     # ex can run anything the editor can, so Codex asks first.
-                                     (["tandem", "ex", "vsplit", "a.py"], False),
+                                     (["tandem", "ex", "vsplit", "a.py"], True),
                                      (["tandemx", "state"], False),
                                      (["rm", "-rf", "x"], False)):
                 with self.subTest(command=command):
@@ -169,35 +159,39 @@ class RealAgentTest(unittest.TestCase):
         return ["claude", "-p", "--setting-sources", "project,local", "--permission-mode", "default",
                 "--no-session-persistence", "--model", model, "--max-turns", "6"]
 
-    def run_claude(self, editor, prompt, edit_settings, extra=()):
+    def run_claude(self, editor, prompt, edit_settings):
         """Runs Claude as :Claude would, with its session settings changed by edit_settings."""
         argv = list(editor.launch("Claude", prompt)["argv"])
         position = argv.index("--settings") + 1
         settings = json.loads(argv[position])
         edit_settings(settings)
         argv[position] = json.dumps(settings)
-        result = subprocess.run(self.claude() + list(extra) + argv, env=editor.launch_env, cwd=editor.directory,
+        result = subprocess.run(self.claude() + argv, env=editor.launch_env, cwd=editor.directory,
                                 text=True, capture_output=True, timeout=300)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return result
 
-    def test_claude_asks_before_ex_commands_unless_you_allow_them(self):
-        for sandboxed in (False, True):
-            for allowed in (False, True):
-                with self.subTest(sandboxed=sandboxed, user_allows_ex=allowed):
-                    editor = Editor(self)
-                    sandbox = (lambda settings: settings["sandbox"].update(enabled=True)) if sandboxed else (lambda _: None)
-                    # Print mode can't ask, so a command that needs approval is refused.
-                    result = self.run_claude(editor, EX_PROMPT, sandbox,
-                                             ["--allowedTools", "Bash(tandem ex *)"] if allowed else [])
-                    self.assertEqual("other.py" in editor.files(), allowed, result.stdout)
+    def test_claude_runs_ex_commands_without_asking(self):
+        # Print mode can't ask, so a command that needs approval is refused.
+        # Without Tandem's settings the same request must fail, or this test proves nothing.
+        for sandboxed, tandem_settings in ((False, True), (True, True), (False, False)):
+            with self.subTest(sandboxed=sandboxed, tandem_settings=tandem_settings):
+                editor = Editor(self)
+
+                def settings(values):
+                    if sandboxed:
+                        values["sandbox"]["enabled"] = True
+                    if not tandem_settings:
+                        values.clear()
+                result = self.run_claude(editor, EX_PROMPT, settings)
+                self.assertEqual("other.py" in editor.files(), tandem_settings, result.stdout)
 
     def test_claude_opens_a_split_when_asked(self):
         # What the user said, not which command to run: the instructions must
         # tell Claude that it can.
         editor = Editor(self)
         result = self.run_claude(editor, "Open other.py in a vertical split next to my code, then reply done.",
-                                 lambda _: None, ["--allowedTools", "Bash(tandem ex *)"])
+                                 lambda _: None)
         self.assertIn("other.py", editor.files(), result.stdout)
         self.assertIn(editor.file.name, editor.files(), result.stdout)
 
@@ -216,7 +210,7 @@ class RealAgentTest(unittest.TestCase):
                 result = self.run_claude(editor, DIRECT_PROMPT, sandbox)
                 self.assertEqual("other.py" in editor.files(), socket_open, result.stdout)
 
-    def test_codex_reaches_the_editor_from_its_sandbox_with_the_documented_rule(self):
+    def test_codex_runs_tandem_commands_from_its_sandbox_with_tandems_rules(self):
         if not codex():
             self.skipTest("Codex is not installed")
         model = os.environ.get("TANDEM_E2E_CODEX_MODEL")
@@ -226,13 +220,18 @@ class RealAgentTest(unittest.TestCase):
                 if not allowed and your_codex_rules_allow_tandem():
                     self.skipTest("your ~/.codex/rules already allow tandem")
                 editor = Editor(self)
-                launched = editor.launch("Codex", PROMPT)
+                launched = editor.launch("Codex", EX_PROMPT)
+                written = Path(editor.env["CODEX_HOME"]) / "rules/tandem.rules"
                 if allowed:
-                    # The rule sits in a trusted project layer here instead of
-                    # ~/.codex/rules, to leave your rules alone.
+                    # The file Tandem wrote sits in a trusted project layer here
+                    # instead of ~/.codex/rules, to leave your rules alone.
                     rules = editor.directory / ".codex/rules"
                     rules.mkdir(parents=True)
-                    (rules / "tandem.rules").write_text(documented_codex_rule() + "\n")
+                    shutil.copy(written, rules / "tandem.rules")
+                # Codex needs your own home for its login.
+                env = {key: value for key, value in launched["env"].items() if key != "CODEX_HOME"}
+                if os.environ.get("CODEX_HOME"):
+                    env["CODEX_HOME"] = os.environ["CODEX_HOME"]
                 # --ephemeral keeps the session out of your Codex history. Codex
                 # still adds each run's directory to the trusted projects in
                 # ~/.codex/config.toml, whatever the flags.
@@ -242,12 +241,10 @@ class RealAgentTest(unittest.TestCase):
                         "-c", 'model_reasoning_effort="low"',
                         "-c", 'projects."%s".trust_level="trusted"' % editor.directory,
                         *launched["argv"]]
-                result = subprocess.run(argv, env=launched["env"], cwd=editor.directory,
+                result = subprocess.run(argv, env=env, cwd=editor.directory,
                                         text=True, capture_output=True, timeout=300)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-                self.assertEqual((3, "agent check") in editor.notes(), allowed,
-                                 result.stderr + result.stdout)
-
+                self.assertEqual("other.py" in editor.files(), allowed, result.stderr + result.stdout)
 
 if __name__ == "__main__":
     unittest.main()

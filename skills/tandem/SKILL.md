@@ -48,10 +48,9 @@ tandem ex COMMAND                               # run any Ex command in your win
   To move to another window, use `tandem ex 'call win_gotoid(ID)'` with an ID
   from `state`, whose `layout` gives the user's tab as nested `row` (side by
   side) and `col` (stacked) splits.
-- `ex` can do anything the editor can, including run shell commands, so the
-  user may be asked to approve it. Use your own tools for shell work, not `:!`.
-  Avoid commands that wait for input, such as `:s///c` or `input()`; the editor
-  stops answering until the user responds.
+- Run shell commands with your own tools, not `:!`, so your usual permissions
+  apply. Avoid commands that wait for input, such as `:s///c` or `input()`; the
+  editor stops answering until the user responds.
 - If `tandem` is not on your PATH, run `"$TANDEM_CLI"` instead.
 - If `tandem` cannot reach the editor and your shell is sandboxed, rerun the
   same `tandem` command with permission to run outside the sandbox; the user

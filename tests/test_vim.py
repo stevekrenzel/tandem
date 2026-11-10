@@ -14,7 +14,8 @@ import time
 import unittest
 import uuid
 
-from support import CLAUDE_SETTINGS, CLI, SKILL, VIM_STARTUP, clean_env, default_ask, fake_agent, git, instructions, launches, make_repo, wait_for
+from support import (CLAUDE_SETTINGS, CLI, SKILL, VIM_STARTUP, clean_env, default_ask, documented_codex_rule,
+                     fake_agent, git, instructions, launches, make_repo, wait_for)
 
 MACVIM = os.environ.get("MACVIM_BINARY", "/Applications/MacVim.app/Contents/MacOS/Vim")
 TERMINAL_VIM = os.environ.get("VIM_TEST_BINARY") or shutil.which("vim")
@@ -38,7 +39,9 @@ class VimCases:
         self.server = ("TANDEM_TEST_" + uuid.uuid4().hex[:12].upper() if self.use_gui
                        else str(self.directory / "vim.sock"))
         # An outer Neovim must not capture requests meant for Vim.
+        # Starting Codex writes Tandem's rules file, so keep it out of your ~/.codex.
         self.env = clean_env(NVIM="/nonexistent/outer-neovim.sock", TANDEM_EDITOR="vim",
+                             CODEX_HOME=str(self.directory / "codex home"),
                              TANDEM_SERVER=self.server, TANDEM_EDITOR_BIN=self.binary)
         if not self.use_gui:
             self.env["VIM_CLIENTSERVER"] = "socket"
@@ -452,6 +455,12 @@ class VimCases:
         self.assertEqual(self.expr("winbufnr(%d)" % target), self.buffer)
         self.assertEqual(self.notes(), ["after"])
         self.assertEqual(len(launches(self.log)), 1)
+
+    def test_starting_codex_lets_it_run_tandem_commands_without_asking(self):
+        rules = Path(self.env["CODEX_HOME"]) / "rules/tandem.rules"
+        self.commands("let g:tandem_codex_cmd = [%s]" % vim_string(str(self.agent())))
+        self.assertEqual(self.launch("Codex")["error"], "")
+        self.assertIn(documented_codex_rule(), rules.read_text().splitlines())
 
     def test_selected_lines_are_included_in_the_prompt(self):
         self.commands("let g:tandem_claude_cmd = [%s]" % vim_string(str(self.agent())))

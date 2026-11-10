@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import struct
 import subprocess
 import termios
@@ -16,14 +17,16 @@ CLI = ROOT / "skills/tandem/scripts/tandem"
 SKILL = ROOT / "skills/tandem/SKILL.md"
 
 
-# The session settings Tandem gives Claude: the helper's display commands run
-# without asking, and the helper runs outside Claude's sandbox. tandem ex is
-# left to the user's own approval.
-CLAUDE_SETTINGS = {
-    "permissions": {"allow": ["Bash(tandem %s *)" % command
-                              for command in ("state", "read", "show", "highlight", "diff", "clear")]},
-    "sandbox": {"excludedCommands": ["tandem *"]},
-}
+# The session settings Tandem gives Claude: every tandem command runs without
+# asking, outside Claude's sandbox.
+CLAUDE_SETTINGS = {"permissions": {"allow": ["Bash(tandem *)"]}, "sandbox": {"excludedCommands": ["tandem *"]}}
+
+
+def documented_codex_rule():
+    """The Codex rule that README says Tandem writes."""
+    match = re.search(r'^\s*(prefix_rule\(.*"tandem".*\))\s*$', (ROOT / "README.md").read_text(), re.MULTILINE)
+    assert match, "README must show the Codex rule"
+    return match.group(1)
 
 
 def clean_env(**extra):

@@ -101,26 +101,24 @@ and tabs it opens once they stop helping.
 ## Permissions
 
 The agent drives your editor by running a small helper, `tandem`, in its shell.
-Reading, opening files, highlighting, and comparing need no approval.
-`tandem ex` does: it can do anything your editor can, including run shell
-commands with `:!`, so it goes through your agent's usual approval. Approve it
-with "don't ask again" to let the agent drive freely.
+Tandem lets the agent run every `tandem` command without asking, and leaves
+everything else to your agent's own permissions.
 
-- **Claude Code:** Tandem passes `--settings` that allow the helper's other
-  commands and run the helper outside Claude's sandbox, where your permission
-  rules apply. These add to your own settings, and your deny and ask rules
-  still win. To approve `tandem ex` up front, allow `Bash(tandem ex *)`.
-- **Codex:** a session can't be granted the helper alone, so Tandem adds
-  nothing. If Codex runs sandboxed, as it does by default, it asks to run its
-  first `tandem` command outside the sandbox. Approve it with "don't ask again",
-  or add this line to `~/.codex/rules/default.rules`:
+- **Claude Code:** Tandem passes `--settings` that allow `Bash(tandem *)` and
+  run the helper outside Claude's sandbox, so that only the helper can reach
+  your editor. These add to your own settings, and your deny and ask rules
+  still win.
+- **Codex:** Codex reads permissions only from rule files, so the first time you
+  run `:Codex`, Tandem writes `~/.codex/rules/tandem.rules` (under `$CODEX_HOME`
+  if you set it) with this rule, which lets `tandem` commands run outside
+  Codex's sandbox without asking:
 
   ```
-  prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")
+  prefix_rule(pattern=["tandem"], decision="allow")
   ```
 
-  The rule lets only those `tandem` commands run outside the sandbox. To also
-  approve `tandem ex` up front, add `"ex"` to the list.
+  Tandem never changes the file once it exists. To manage your rules yourself,
+  set `g:tandem_codex_rules` to `0`.
 
 ## Configuration
 
@@ -131,6 +129,7 @@ Tandem works without configuration.
 | `g:tandem_claude_cmd` | `['claude']` | Command that starts Claude Code. |
 | `g:tandem_codex_cmd` | `['codex', '--no-daemon']` | Command that starts Codex. `--no-daemon` runs Codex's commands in this session, where they can reach the editor. |
 | `g:tandem_width` | `0.42` | Agent pane width, as a fraction of the screen or a number of columns. |
+| `g:tandem_codex_rules` | `1` | Write `~/.codex/rules/tandem.rules`, which lets Codex run `tandem` commands without asking. |
 
 ```vim
 let g:tandem_claude_cmd = ['claude', '--model', 'opus']
@@ -156,9 +155,10 @@ Highlights use `TandemRange` and `TandemNote`, linked to `Visual` and `Special`.
   for an `opt` package.
 - **The executable was not found.** Install the agent and sign in, or set
   `g:tandem_claude_cmd` or `g:tandem_codex_cmd` to its full path.
-- **The agent can't reach the editor.** For Codex, allow the `tandem` command as
-  described under [Permissions](#permissions). Otherwise run `:Claude!` or
-  `:Codex!` from a code window. MacVim's server needs its GUI; terminal Vim
+- **The agent can't reach the editor.** For Codex, check that Tandem's rules
+  file exists, as described under [Permissions](#permissions); in Neovim,
+  `:checkhealth tandem` checks it. Otherwise run `:Claude!` or `:Codex!` from a
+  code window. MacVim's server needs its GUI; terminal Vim
   needs a remote transport such as `+socketserver`.
 - **This tab already has a diff open.** Close that comparison or use another
   tab. Vim and Neovim share one diff per tab.

@@ -13,7 +13,7 @@ local function command(agent)
   return value
 end
 
-local codex_rule = 'prefix_rule(pattern=["tandem", ["state", "read", "show", "highlight", "diff", "clear"]], decision="allow")'
+local codex_rule = 'prefix_rule(pattern=["tandem"], decision="allow")'
 
 -- Whether the user's Codex rules let a command run outside the sandbox without
 -- asking. Asks Codex itself, so any form of rule counts. nil if Codex can't say.
@@ -70,24 +70,24 @@ function M.check()
   end
 
   if found.codex_cmd then
-    local codex = command(agents[2])[1]
-    local display = codex_allows(codex, { "tandem", "show", "file" })
-    local ex = codex_allows(codex, { "tandem", "ex", "vsplit" })
-    if display == nil then
+    local allowed = codex_allows(command(agents[2])[1], { "tandem", "ex", "vsplit" })
+    local file = vim.fn["tandem#CodexRulesFile"]()
+    if allowed == nil then
       vim.health.info("Could not check your Codex rules with `codex execpolicy`")
-    elseif display then
-      vim.health.ok("Codex may run the tandem helper outside its sandbox")
-    else
+    elseif allowed then
+      vim.health.ok("Codex may run tandem commands without asking")
+    elseif vim.g.tandem_codex_rules == 0 or vim.g.tandem_codex_rules == false then
       vim.health.info(
-        "If Codex runs sandboxed, approve its first `tandem` command with \"don't ask again\", or add this line to ~/.codex/rules/default.rules:\n"
+        "Codex asks before it runs tandem commands. To let it run them without asking, add this line to "
+          .. vim.fn.fnamemodify(file, ":h")
+          .. "/default.rules:\n"
           .. codex_rule
       )
-    end
-    if ex then
-      vim.health.warn(
-        "Your Codex rules let `tandem ex` run without asking. It can run any editor command, including shell commands.",
-        "To have Codex ask first, allow only the other tandem commands:\n" .. codex_rule
-      )
+    elseif vim.fn.filereadable(file) == 1 then
+      vim.health.warn("Codex asks before it runs tandem commands, despite " .. file,
+        "The file may have been edited, or another rule may require approval")
+    else
+      vim.health.info("Codex asks before it runs tandem commands until you first run :Codex, which writes " .. file)
     end
   end
 end
