@@ -225,6 +225,15 @@ class NeovimTest(unittest.TestCase):
         self.assertTrue(self.lua("return vim.bo[%d].modified" % self.buffer))
         self.assertEqual(self.file.read_text(), "second agent edit\n")
 
+    def test_commands_reload_every_window_whose_file_changed_on_disk(self):
+        self.lua("vim.cmd('split ' .. vim.fn.fnameescape(%s)); vim.cmd('wincmd p'); return true" % json.dumps(str(self.other)))
+        other = self.lua("return vim.fn.bufnr(%s)" % json.dumps(str(self.other)))
+        self.other.write_text("agent edit\n" + self.other.read_text())
+        later = time.time() + 5
+        os.utime(self.other, (later, later))
+        self.call("state")
+        self.assertEqual(self.lua("return vim.api.nvim_buf_get_lines(%d,0,1,false)" % other), ["agent edit"])
+
     # ------------------------------------------------- show, highlight
 
     def test_show_preserves_focus_unsaved_buffers_and_autosave_hooks(self):
