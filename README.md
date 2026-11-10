@@ -5,6 +5,8 @@ a split beside your code and shares the editor with you as an equal: it reads
 your unsaved buffers, opens files and splits, runs any command you could type
 after `:`, highlights code with notes, and shows Git comparisons.
 
+![:Claude vim fu time: tile every file that uses qty opens Claude beside the code. Claude tiles the four files in a 2×2 grid with splits and search-highlights every qty. Asked to rename it to quantity in all of them at once, Claude runs one :windo command that substitutes and saves, and every highlighted qty turns into quantity across the four windows.](.github/vim-fu.gif)
+
 ![:ClaudeTour how does checkout compute the total? opens Claude beside the code. Each time the user says next, Claude shows the next stop in the editor (checkout, the cart subtotal, discount codes, then sales tax), highlights it with a short note, and explains it.](.github/tour.gif)
 
 ![After an unsaved edit, :Claude what did I just break? opens Claude beside the code. Claude compares the buffer with Git, highlights the changed line with a note, and explains which test now fails.](.github/break.gif)
